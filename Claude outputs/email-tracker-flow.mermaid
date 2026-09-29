@@ -1,0 +1,16 @@
+flowchart TD
+    A([📧 New email arrives<br/>or is sent in Outlook]) --> B[Microsoft 365 notifies the app<br/>+ safety check every 15 min]
+    B --> C[App reads Inbox & Sent Items<br/>read-only]
+    C --> D[Clean the email<br/>remove quotes, signatures, HTML]
+    D --> E[Group into a thread<br/>by conversation / subject]
+    E --> F{Was it replied to?}
+    F -->|Yes| G[Record reply time,<br/>who replied, response time]
+    F -->|No| H{Waiting longer<br/>than 24 work hours?}
+    H -->|Yes| I[Mark OVERDUE]
+    H -->|No| J[Mark AWAITING REPLY]
+    G --> K[Claude AI summarizes the thread<br/>summary · category · priority · next action]
+    I --> K
+    J --> K
+    K --> L[(Database)]
+    L --> M[📊 Dashboard<br/>tracker table, threads, KPIs]
+    L --> N[📨 Daily digest email<br/>08:00 Dubai time]

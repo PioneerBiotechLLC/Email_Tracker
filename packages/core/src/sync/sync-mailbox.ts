@@ -7,7 +7,7 @@ import { extractReplyHeaders, normalizeMessageId } from "../mail/headers.js";
 import type { MailProvider, RawMessage, SyncFolder } from "../mail/provider.js";
 import { normalizeSubject } from "../mail/subject.js";
 import { cleanBody } from "../mail/text.js";
-import { recomputeThread } from "./threads.js";
+import { ownerAddresses, recomputeThread } from "./threads.js";
 
 const log = createLogger("sync");
 
@@ -27,10 +27,6 @@ export interface SyncStats {
 }
 
 const FOLDERS: SyncFolder[] = ["inbox", "sentitems"];
-
-function ownerAddresses(mailbox: Mailbox): Set<string> {
-  return new Set([mailbox.emailAddress.toLowerCase(), ...mailbox.aliases.map((a) => a.toLowerCase())]);
-}
 
 /** Upserts one Graph message (and its thread shell). Returns the conversation id touched. */
 async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFolder, raw: RawMessage, owners: Set<string>): Promise<string> {

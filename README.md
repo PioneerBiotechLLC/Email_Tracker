@@ -2,7 +2,7 @@
 
 Connects to Microsoft 365 mailboxes (read-only), tracks which inbound emails were replied to and how fast, summarizes threads with Claude, and shows it all on a dashboard with a daily digest. Full brief: [SPEC.md](SPEC.md).
 
-**Status: Phase 1 (Foundation) complete** — monorepo, Prisma schema, Graph app-only auth, and a backfill CLI. Phases 2–7 (reply tracking, AI summaries, dashboard, live sync, digest, deploy) follow.
+**Status: Phase 2 (Reply tracking) complete** — on top of Phase 1 (monorepo, Prisma schema, Graph app-only auth, backfill CLI). Phases 3–7 (AI summaries, dashboard, live sync, digest, deploy) follow.
 
 ## Hard rules
 
@@ -94,7 +94,35 @@ pnpm db:studio                               # browse the data
 - Honours `Retry-After` on 429/503 and backs off exponentially.
 - Drafts are skipped. Deleted/moved-out messages are counted but never deleted from our DB (retention purge comes in Phase 6).
 
-Thread `status` in Phase 1 is a naive "who spoke last" value; Phase 2 replaces it with proper reply detection.
+## 4. Reply tracking (Phase 2)
+
+After every sync, each touched thread is re-evaluated by pure functions in [packages/core/src/sync/replies.ts](packages/core/src/sync/replies.ts) (no DB access, fully unit-tested; the DB wrapper is `recomputeThread` in `threads.ts`).
+
+**Reply rules** for each real inbound message (not an auto-reply, not from our own address/aliases), first match wins:
+
+1. `outlook_verb` — Outlook stamped the message with Reply (102) or Reply-All (103): `repliedAt` = the verb time. Forward (104) is stored but is not a reply.
+2. `header_match` — a Sent Items message whose `In-Reply-To` or `References` contains the inbound message's `Message-ID`: `repliedAt` = its sent time.
+3. `conversation_match` — the earliest Sent Items message in the same conversation, sent after the inbound one, with the sender in To/Cc.
+
+Details: outbound times use `sentAt` (the sync also stores it in `receivedAt` for outbound rows, but `sentAt` is authoritative). One reply can answer several earlier unanswered emails from the same sender. When the verb time and the matched sent message disagree, the verb time is used but the sent message is still linked (`repliedByMessageId`). Our own out-of-office never counts as a reply, and a reply is never earlier than the received time. `responseMinutes` is wall-clock; `responseBusinessMinutes` counts only working minutes in the org's timezone (weekends, nights and out-of-hours replies count 0).
+
+**Thread status** — `awaiting_us` (latest real message is an unanswered inbound), `awaiting_them` (we spoke last, or the latest inbound was answered), `no_reply_needed` and `closed` (sticky when set by a user or the AI, except that a new inbound after a manual close reopens the thread). `awaitingSince` and `overdueAt` are stored so overdue threads are a simple query: `status = awaiting_us AND overdueAt <= now()`.
+
+**Org settings** (columns on `Organization`): `timezone` (Asia/Dubai), `workDays` (0 = Sun … 6 = Sat; default Sun–Thu), `workStart` 09:00, `workEnd` 18:00, `replySlaHours` (overrides `REPLY_SLA_HOURS`, default 24 business hours). Edit them in `pnpm db:studio` until the settings page ships in Phase 6.
+
+```bash
+pnpm db:deploy                                   # applies the Phase 2 migration
+pnpm replies:recompute sales@api-pharma.net      # or `all` — re-evaluate every thread (after backfill / rule or settings changes)
+pnpm replies:report sales@api-pharma.net --days 30
+```
+
+### Verifying against Outlook
+
+1. Run `pnpm sync:once <mailbox>` then `pnpm replies:report <mailbox> --days 30`.
+2. **Oldest unanswered list**: open each in Outlook. It should have no reply from you (the Reply/Reply-All icon absent, nothing in Sent Items for that sender after that date). If Outlook shows it as replied, check whether the reply was sent from another mailbox or alias; add aliases with `pnpm mailbox add <email> --alias other@…` and re-run `pnpm replies:recompute`.
+3. **Replied %**: in Outlook, filter the Inbox on the same window and compare the count of messages with the replied icon. Differences usually come from replies sent from a different mailbox, or from messages that only got a forward (counted as not replied, by design).
+4. **Response times**: pick ~20 emails, compare `repliedAt` (visible in `pnpm db:studio`, Message table) with the timestamp of your reply in Sent Items. Business-hours minutes should be 0 for anything answered on a Friday/Saturday or at night.
+5. If the org's hours are wrong, edit the `Organization` row and run `pnpm replies:recompute all`.
 
 ## Commands
 
@@ -104,10 +132,12 @@ Thread `status` in Phase 1 is a naive "who spoke last" value; Phase 2 replaces i
 | `pnpm mailbox add <email> [--org-name] [--org-domain] [--tenant] [--alias …]` | register a mailbox |
 | `pnpm mailbox list` / `pause <email>` / `resume <email>` | manage mailboxes |
 | `pnpm sync:once <email\|all> [--reset] [--days N]` | backfill / incremental sync |
+| `pnpm replies:recompute <email\|all>` | re-run reply detection + thread status for every thread |
+| `pnpm replies:report <email> [--days 30]` | reply stats + oldest unanswered emails, for spot-checking against Outlook |
 | `pnpm test` | unit tests (vitest) |
 | `pnpm --filter @email-tracker/core check:sync` | end-to-end sync check against your DB using a fake mail provider (no Graph needed) |
 | `pnpm typecheck` | TypeScript across the workspace |
 
 ## Environment variables
 
-See [.env.example](.env.example). Required in Phase 1: `DATABASE_URL`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Optional: `BACKFILL_DAYS` (90), `DATA_ENCRYPTION_KEY`, `LOG_LEVEL` (`debug|info|warn|error`).
+See [.env.example](.env.example). Required: `DATABASE_URL`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Optional: `BACKFILL_DAYS` (90), `REPLY_SLA_HOURS` (24, business hours; per-org override via `Organization.replySlaHours`), `DATA_ENCRYPTION_KEY`, `LOG_LEVEL` (`debug|info|warn|error`).

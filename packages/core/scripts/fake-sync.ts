@@ -3,7 +3,7 @@
  * (no Graph credentials needed). Run against any Postgres:
  *   DATABASE_URL=... AZURE_TENANT_ID=t AZURE_CLIENT_ID=c AZURE_CLIENT_SECRET=s pnpm exec tsx scripts/fake-sync.ts
  */
-import { getDb, disconnectDb, syncMailbox, readBody } from "../src/index.js";
+import { getDb, disconnectDb, syncMailbox, readBody, recomputeThread } from "../src/index.js";
 import type { MailProvider, RawMessage, ListChangesOptions, DeltaPage, ListChangesResult, SubscriptionInfo, MailUser } from "../src/mail/provider.js";
 
 const OWNER = "sales@example-pharma.com";
@@ -19,7 +19,7 @@ function msg(p: Partial<RawMessage> & { id: string; receivedAt: Date; subject: s
 
 const inbox: RawMessage[] = [
   msg({ id: "m1", subject: "PO 4512 – Paracetamol", receivedAt: d("2026-09-01T08:00:00Z"),
-    body: { contentType: "html", content: "<p>Please quote 500 units.</p><br>Best regards,<br>Ali" }, lastVerb: 102, lastVerbAt: d("2026-09-01T10:00:00Z") }),
+    body: { contentType: "html", content: "<p>Please quote 500 units.</p><br>Best regards,<br>Ali" }, lastVerb: 102, lastVerbAt: d("2026-09-01T10:05:00Z") }),
   msg({ id: "m3", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-02T09:00:00Z"),
     body: { contentType: "text", content: "Thanks, confirmed.\n\nOn Mon, Sales wrote:\n> Quote attached" },
     headers: [{ name: "In-Reply-To", value: "<m2@x>" }, { name: "References", value: "<m1@x> <m2@x>" }] }),
@@ -79,6 +79,45 @@ try {
   assert(t1.messageCount === 3 && t1.normalizedSubject === "po 4512 – paracetamol", `thread grouped: ${t1.messageCount} msgs, "${t1.normalizedSubject}"`);
   assert(t1.status === "awaiting_us" && (t1.participants as unknown[]).length === 2, "thread status/participants");
   assert(t1.firstMessageAt.toISOString() === "2026-09-01T08:00:00.000Z" && t1.lastMessageAt.toISOString() === "2026-09-02T09:00:00.000Z", "thread time range");
+
+  // Phase 2: reply detection + status (m1 received 08:00Z = 12:00 Dubai, Tue 1 Sep 2026)
+  const m1r = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m1" } });
+  assert(m1r.repliedAt?.toISOString() === "2026-09-01T10:05:00.000Z" && m1r.replyMethod === "outlook_verb", "m1 replied via Outlook verb (verb time wins)");
+  assert(m1r.repliedByMessageId === m2.id, "m1 linked to sent message m2 (header match)");
+  assert(m1r.responseMinutes === 125 && m1r.responseBusinessMinutes === 125, `m1 response 125 min raw/business (got ${m1r.responseMinutes}/${m1r.responseBusinessMinutes})`);
+  const m3r = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m3" } });
+  assert(m3r.repliedAt === null && m3r.replyMethod === null, "m3 unanswered");
+  const m2r = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m2" } });
+  assert(m2r.repliedAt === null, "outbound m2 has no reply fields");
+  const t1r = await db.thread.findUniqueOrThrow({ where: { id: t1.id } });
+  assert(t1r.status === "awaiting_us" && t1r.awaitingSince?.toISOString() === "2026-09-02T09:00:00.000Z", "thread 1 awaiting_us since m3");
+  // m3 at 13:00 Dubai Wed 2 Sep; 24 business hours → Wed 5h, Thu 9h, Sun 9h, Mon 1h → Mon 7 Sep 10:00 Dubai = 06:00Z
+  assert(t1r.overdueAt?.toISOString() === "2026-09-07T06:00:00.000Z", `thread 1 overdueAt = SLA in business hours (got ${t1r.overdueAt?.toISOString()})`);
+  assert(t1r.overdueAt! <= new Date(), "thread 1 is overdue now");
+  const t2 = await db.thread.findUniqueOrThrow({ where: { mailboxId_conversationId: { mailboxId: mb.id, conversationId: "conv-2" } } });
+  assert(t2.status === "no_reply_needed", "auto-reply-only thread needs no reply");
+  // Manual close is kept, and a new inbound reopens it
+  await db.thread.update({ where: { id: t1.id }, data: { status: "closed", closedAt: new Date("2026-09-03T00:00:00Z"), closedBy: "tester" } });
+  await recomputeThread(db, mb.id, "conv-1");
+  assert((await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).status === "closed", "manual close kept on recompute");
+  inbox.push(msg({ id: "m5", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-04T09:00:00Z") }));
+  await syncMailbox(mb.id, { provider, reset: true });
+  const t1re = await db.thread.findUniqueOrThrow({ where: { id: t1.id } });
+  assert(t1re.status === "awaiting_us" && t1re.closedAt === null && t1re.awaitingSince?.toISOString() === "2026-09-04T09:00:00.000Z", "new inbound after close reopens thread");
+  inbox.pop();
+  // Alias: a message from an alias landing in the inbox counts as ours
+  await db.mailbox.update({ where: { id: mb.id }, data: { aliases: ["orders@example-pharma.com"] } });
+  inbox.push(msg({ id: "m6", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-05T09:00:00Z"), from: { address: "orders@example-pharma.com", name: "Orders" }, to: [{ address: "ali@customer.com" }] }));
+  await syncMailbox(mb.id, { provider, reset: true });
+  const t1alias = await db.thread.findUniqueOrThrow({ where: { id: t1.id } });
+  const m3alias = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m3" } });
+  assert(t1alias.status === "awaiting_them" && m3alias.replyMethod === "conversation_match", "alias message treated as our reply (conversation match)");
+  inbox.pop();
+  await db.mailbox.update({ where: { id: mb.id }, data: { aliases: [] } });
+  // Sync never deletes (read-only mirror), so drop the scenario messages ourselves and recompute.
+  await db.message.deleteMany({ where: { graphMessageId: { in: ["m5", "m6"] } } });
+  await recomputeThread(db, mb.id, "conv-1");
+  assert((await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).status === "awaiting_us", "recompute after removing scenario messages restores awaiting_us");
 
   const mbAfter = await db.mailbox.findUniqueOrThrow({ where: { id: mb.id } });
   assert(mbAfter.inboxDeltaLink === "delta:inbox" && mbAfter.sentDeltaLink === "delta:sentitems" && mbAfter.lastSyncedAt, "delta links + lastSyncedAt saved");

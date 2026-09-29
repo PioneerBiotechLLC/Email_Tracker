@@ -12,7 +12,9 @@
     "mailbox": "pnpm --filter @email-tracker/worker mailbox",
     "sync:once": "pnpm --filter @email-tracker/worker sync:once",
     "test": "pnpm -r --if-present test",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "replies:recompute": "pnpm --filter @email-tracker/worker replies recompute",
+    "replies:report": "pnpm --filter @email-tracker/worker replies report"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

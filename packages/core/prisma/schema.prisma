@@ -64,6 +64,13 @@ model Organization {
   domain          String   @unique
   azureTenantId   String
   timezone        String   @default("Asia/Dubai")
+  /// Working days, 0 = Sunday … 6 = Saturday. Default Sun–Thu.
+  workDays        Int[]    @default([0, 1, 2, 3, 4])
+  /// Local wall-clock "HH:MM"
+  workStart       String   @default("09:00")
+  workEnd         String   @default("18:00")
+  /// Overrides REPLY_SLA_HOURS for this org when set (business hours)
+  replySlaHours   Float?
   summaryLanguage String   @default("en")
   /// Free-form org settings: business hours, SLA override, digest recipients, etc.
   settings        Json     @default("{}")
@@ -117,6 +124,10 @@ model Thread {
   nextAction          String?
   summaryUpdatedAt    DateTime?
   summaryMessageCount Int            @default(0)
+  /// When status = awaiting_us: receivedAt of the oldest unanswered inbound message we are waiting to answer
+  awaitingSince       DateTime?
+  /// When status = awaiting_us: the instant the reply SLA expires (business-hours aware). Overdue ⇔ overdueAt <= now.
+  overdueAt           DateTime?
   closedAt            DateTime?
   closedBy            String?
   createdAt           DateTime       @default(now())
@@ -126,6 +137,7 @@ model Thread {
 
   @@unique([mailboxId, conversationId])
   @@index([mailboxId, status])
+  @@index([mailboxId, status, overdueAt])
   @@index([mailboxId, normalizedSubject])
   @@index([mailboxId, lastMessageAt])
 }

@@ -6,7 +6,8 @@
   "scripts": {
     "mailbox": "tsx src/cli/mailbox.ts",
     "sync:once": "tsx src/cli/sync-once.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "replies": "tsx src/cli/replies.ts"
   },
   "dependencies": {
     "@email-tracker/core": "workspace:*",
