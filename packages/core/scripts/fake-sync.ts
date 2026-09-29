@@ -3,7 +3,8 @@
  * (no Graph credentials needed). Run against any Postgres:
  *   DATABASE_URL=... AZURE_TENANT_ID=t AZURE_CLIENT_ID=c AZURE_CLIENT_SECRET=s pnpm exec tsx scripts/fake-sync.ts
  */
-import { getDb, disconnectDb, syncMailbox, readBody, recomputeThread } from "../src/index.js";
+import { getDb, disconnectDb, syncMailbox, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
+import type Anthropic from "@anthropic-ai/sdk";
 import type { MailProvider, RawMessage, ListChangesOptions, DeltaPage, ListChangesResult, SubscriptionInfo, MailUser } from "../src/mail/provider.js";
 
 const OWNER = "sales@example-pharma.com";
@@ -118,6 +119,52 @@ try {
   await db.message.deleteMany({ where: { graphMessageId: { in: ["m5", "m6"] } } });
   await recomputeThread(db, mb.id, "conv-1");
   assert((await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).status === "awaiting_us", "recompute after removing scenario messages restores awaiting_us");
+
+  // Phase 3: mocked AI step (no API calls). The fake client returns a fixed tool call.
+  console.log("AI summaries (mocked client)");
+  process.env.ANTHROPIC_API_KEY ||= "fake-key-for-tests";
+  let aiCalls = 0;
+  const fakeAi = (input: Record<string, unknown>): SummaryClient => ({
+    messages: { create: async () => { aiCalls++; return { id: "m", type: "message", role: "assistant", model: "claude-sonnet-5-5", stop_reason: "tool_use", stop_sequence: null,
+      content: [{ type: "tool_use", id: "t", name: SUMMARY_TOOL_NAME, input }], usage: { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 800, cache_creation_input_tokens: 0 } } as unknown as Anthropic.Message; } } as unknown as Anthropic["messages"],
+  });
+  const summaryInput = { summary: "Ali asked for a quote for 500 units; we replied and he confirmed.", key_points: ["500 units"], asks: [], next_action: null, needs_reply: false, category: "customer", priority: "normal", concluded: false, language: "en" };
+  const plan = await planBackfill({ mailboxIds: [mb.id] });
+  assert(plan.estimate.threads === 2 && plan.estimate.costUsd > 0 && plan.items[0]!.request.user.includes("<email_thread>"), `dry-run plan: ${plan.estimate.threads} threads, est $${plan.estimate.costUsd.toFixed(5)}`);
+  const debounced = await summarizeThread(t1.id, { client: fakeAi(summaryInput), now: new Date("2026-09-02T09:01:00Z") });
+  assert(debounced.outcome === "skipped" && debounced.reason === "debounce", "debounce window respected");
+  const ai1 = await summarizeThread(t1.id, { client: fakeAi(summaryInput) });
+  assert(ai1.outcome === "summarized" && ai1.status === "no_reply_needed", `thread summarized → status ${ai1.status}`);
+  const t1ai = await db.thread.findUniqueOrThrow({ where: { id: t1.id } });
+  assert(t1ai.summary === summaryInput.summary && t1ai.category === "customer" && t1ai.summaryMessageCount === 3 && t1ai.needsReplyDecidedBy === "ai" && !t1ai.needsReply, "summary fields + AI decision saved");
+  const usage = await db.aiUsage.findMany({ where: { threadId: t1.id } });
+  assert(usage.length === 1 && usage[0]!.costUsd > 0 && usage[0]!.cacheReadTokens === 800, `usage logged: $${usage[0]!.costUsd.toFixed(6)}`);
+  const again = await summarizeThread(t1.id, { client: fakeAi(summaryInput) });
+  assert(again.outcome === "skipped" && again.reason === "nothing_new" && aiCalls === 1, "no re-summarize without new messages");
+  // New inbound resets the AI decision and the thread goes back to awaiting_us until re-summarized
+  inbox.push(msg({ id: "m7", subject: "RE: PO 4512 – Paracetamol", receivedAt: new Date() }));
+  await syncMailbox(mb.id, { provider, reset: true });
+  const t1new = await db.thread.findUniqueOrThrow({ where: { id: t1.id } });
+  assert(t1new.status === "awaiting_us" && t1new.needsReply && t1new.needsReplyDecidedBy === null, "new inbound resets the AI decision → awaiting_us");
+  // Invalid output twice → summaryError, no crash
+  const bad = await summarizeThread(t1.id, { client: fakeAi({ ...summaryInput, priority: "critical" }), force: true });
+  assert(bad.outcome === "error" && bad.reason?.startsWith("invalid_output") && aiCalls === 3, "invalid output → retried once → summaryError");
+  assert((await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).summaryError?.includes("invalid_output"), "summaryError stored");
+  // Concluded → closed by AI when not awaiting us
+  const concluded = { ...summaryInput, concluded: true };
+  const okAgain = await summarizeThread(t1.id, { client: fakeAi(concluded), force: true });
+  assert(okAgain.outcome === "summarized" && okAgain.status === "closed", "concluded + no reply needed → closed by AI");
+  assert((await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).closedBy === "ai", "closedBy = ai");
+  // User decision is sticky against the AI, until a new inbound
+  await db.thread.update({ where: { id: t1.id }, data: { status: "no_reply_needed", closedAt: null, closedBy: null, needsReply: false, needsReplyDecidedBy: "user", needsReplyDecidedAt: new Date() } });
+  const userSticky = await summarizeThread(t1.id, { client: fakeAi({ ...summaryInput, needs_reply: true }), force: true });
+  assert(userSticky.status === "no_reply_needed" && (await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).needsReplyDecidedBy === "user", "user decision beats AI needs_reply");
+  // summarizeThreads over the mailbox + cap
+  const many = await summarizeThreads({ mailboxId: mb.id, client: fakeAi(summaryInput), force: true });
+  assert(many.candidates === 2 && many.summarized + many.errors + Object.values(many.skipped).reduce((a, b) => a + b, 0) === 2, `summarizeThreads ran over ${many.candidates} threads`);
+  await db.message.deleteMany({ where: { graphMessageId: "m7" } });
+  inbox.pop();
+  await recomputeThread(db, mb.id, "conv-1");
 
   const mbAfter = await db.mailbox.findUniqueOrThrow({ where: { id: mb.id } });
   assert(mbAfter.inboxDeltaLink === "delta:inbox" && mbAfter.sentDeltaLink === "delta:sentitems" && mbAfter.lastSyncedAt, "delta links + lastSyncedAt saved");

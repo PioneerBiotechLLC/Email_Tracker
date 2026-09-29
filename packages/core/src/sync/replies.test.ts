@@ -244,3 +244,38 @@ describe("computeThreadStatus", () => {
     expect(computeThreadStatus([a], detectReplies([a], opts), { ...fresh, needsReply: false }, statusOpts).status).toBe("no_reply_needed");
   });
 });
+
+describe("needsReply decisions and new inbound (Phase 3)", () => {
+  const decided = (by: "user" | "ai", at: string): ThreadState => ({ status: "no_reply_needed", needsReply: false, needsReplyDecidedAt: dxb(at), closedAt: null });
+  it("a decision (user or AI) stays while nothing new arrives", () => {
+    const a = inbound({ id: "a", receivedAt: dxb("2026-09-28T10:00:00") });
+    for (const by of ["user", "ai"] as const) {
+      const st = computeThreadStatus([a], detectReplies([a], opts), decided(by, "2026-09-28T11:00:00"), statusOpts);
+      expect(st.status).toBe("no_reply_needed");
+      expect(st.decisionReset).toBe(false);
+      expect(st.needsReply).toBe(false);
+    }
+  });
+  it("a new real inbound after the decision resets needsReply and re-evaluates to awaiting_us", () => {
+    const a = inbound({ id: "a", receivedAt: dxb("2026-09-28T10:00:00") });
+    const b = inbound({ id: "b", receivedAt: dxb("2026-09-29T10:00:00") });
+    const st = computeThreadStatus([a, b], detectReplies([a, b], opts), decided("user", "2026-09-28T11:00:00"), statusOpts);
+    expect(st.decisionReset).toBe(true);
+    expect(st.needsReply).toBe(true);
+    expect(st.status).toBe("awaiting_us");
+    expect(st.awaitingSince).toEqual(b.receivedAt);
+  });
+  it("an auto-reply or our own message after the decision does not reset it", () => {
+    const a = inbound({ id: "a", receivedAt: dxb("2026-09-28T10:00:00") });
+    const ooo = inbound({ id: "o", receivedAt: dxb("2026-09-29T10:00:00"), isAutoReply: true });
+    const ours = outbound({ id: "s", sentAt: dxb("2026-09-29T11:00:00") });
+    const st = computeThreadStatus([a, ooo, ours], detectReplies([a, ooo, ours], opts), decided("ai", "2026-09-28T11:00:00"), statusOpts);
+    expect(st.decisionReset).toBe(false);
+    expect(st.status).toBe("no_reply_needed");
+  });
+  it("legacy rows without a decision time keep their value", () => {
+    const a = inbound({ id: "a", receivedAt: dxb("2026-09-28T10:00:00") });
+    const st = computeThreadStatus([a], detectReplies([a], opts), { status: "no_reply_needed", needsReply: false, closedAt: null }, statusOpts);
+    expect(st.status).toBe("no_reply_needed");
+  });
+});

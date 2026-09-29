@@ -162,7 +162,13 @@ export interface ThreadState {
   status: ThreadStatus;
   /** false when a user or the AI decided no reply is needed */
   needsReply: boolean;
-  /** set when a user closed the thread */
+  /**
+   * When the needsReply decision was made. A real inbound message newer than
+   * this resets the decision (needsReply → true) until the AI re-summarizes.
+   * null = legacy/undecided: the current value is kept as is.
+   */
+  needsReplyDecidedAt?: Date | null;
+  /** set when a user or the AI closed the thread */
   closedAt: Date | null;
 }
 
@@ -174,6 +180,10 @@ export interface StatusOptions extends DetectOptions {
 
 export interface StatusResult {
   status: ThreadStatus;
+  /** Effective needsReply after applying the reset rule */
+  needsReply: boolean;
+  /** true when a newer inbound message invalidated a previous needsReply decision */
+  decisionReset: boolean;
   /** receivedAt of the oldest unanswered inbound message we owe a reply to (awaiting_us only) */
   awaitingSince: Date | null;
   /** instant at which the SLA expires (awaiting_us only) */
@@ -195,10 +205,19 @@ export function computeThreadStatus(
   opts: StatusOptions,
 ): StatusResult {
   const now = opts.now ?? new Date();
-  const none = (status: ThreadStatus): StatusResult => ({ status, awaitingSince: null, overdueAt: null, isOverdue: false });
   const replyById = new Map(replies.map((r) => [r.messageId, r]));
-
   const real = messages.filter((m) => !m.isAutoReply).sort(byTime);
+
+  // A real inbound message newer than the last needsReply decision resets it: the
+  // thread needs a reply again until a user or the AI decides otherwise.
+  const decidedAt = current.needsReplyDecidedAt ?? null;
+  const decisionReset =
+    !current.needsReply &&
+    decidedAt != null &&
+    real.some((m) => !isFromUs(m, opts.owners) && effectiveTime(m).getTime() > decidedAt.getTime());
+  const needsReply = current.needsReply || decisionReset;
+  const none = (status: ThreadStatus): StatusResult => ({ status, needsReply, decisionReset, awaitingSince: null, overdueAt: null, isOverdue: false });
+
   if (!real.length) {
     return none(current.status === "closed" ? "closed" : "no_reply_needed");
   }
@@ -208,16 +227,17 @@ export function computeThreadStatus(
     const reopened = real.some((m) => !isFromUs(m, opts.owners) && current.closedAt != null && effectiveTime(m).getTime() > current.closedAt.getTime());
     if (!reopened) return none("closed");
   }
-  if (current.status === "no_reply_needed" && !current.needsReply) return none("no_reply_needed");
+  if (current.status === "no_reply_needed" && !needsReply) return none("no_reply_needed");
 
   if (isFromUs(latest, opts.owners)) return none("awaiting_them");
   const latestReply = replyById.get(latest.id);
   if (latestReply?.repliedAt) return none("awaiting_them");
-  if (!current.needsReply) return none("no_reply_needed");
+  if (!needsReply) return none("no_reply_needed");
 
   // Waiting since the oldest unanswered inbound message that arrived after our last real message
-  // (or after the manual close, when a thread is being reopened).
+  // (or after the manual close / the invalidated needsReply decision, when a thread is being reopened).
   let floor = current.status === "closed" && current.closedAt ? current.closedAt.getTime() : 0;
+  if (decisionReset && decidedAt) floor = Math.max(floor, decidedAt.getTime());
   for (const m of real) if (isFromUs(m, opts.owners)) floor = Math.max(floor, effectiveTime(m).getTime());
   const pending = real.filter(
     (m) => !isFromUs(m, opts.owners) && !replyById.get(m.id)?.repliedAt && effectiveTime(m).getTime() > floor,
@@ -226,6 +246,8 @@ export function computeThreadStatus(
   const overdueAt = addBusinessMinutes(awaitingSince, opts.slaHours * 60, opts.businessHours);
   return {
     status: "awaiting_us",
+    needsReply,
+    decisionReset,
     awaitingSince,
     overdueAt,
     isOverdue: overdueAt != null && overdueAt.getTime() <= now.getTime(),

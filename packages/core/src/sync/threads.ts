@@ -145,7 +145,7 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
   const status = computeThreadStatus(
     inputs,
     replies,
-    { status: thread.status, needsReply: thread.needsReply, closedAt: thread.closedAt },
+    { status: thread.status, needsReply: thread.needsReply, needsReplyDecidedAt: thread.needsReplyDecidedAt, closedAt: thread.closedAt },
     { owners, businessHours, slaHours },
   );
 
@@ -183,6 +183,8 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
         overdueAt: status.overdueAt,
         // A reopened thread is no longer closed.
         ...(thread.status === "closed" && status.status !== "closed" ? { closedAt: null, closedBy: null } : {}),
+        // A newer inbound message invalidates the previous needsReply decision (user or AI) until the AI re-summarizes.
+        ...(status.decisionReset ? { needsReply: true, needsReplyDecidedBy: null, needsReplyDecidedAt: null } : {}),
       },
     }),
   );

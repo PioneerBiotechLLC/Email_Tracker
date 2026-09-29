@@ -14,7 +14,11 @@
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
     "replies:recompute": "pnpm --filter @email-tracker/worker replies recompute",
-    "replies:report": "pnpm --filter @email-tracker/worker replies report"
+    "replies:report": "pnpm --filter @email-tracker/worker replies report",
+    "ai:backfill": "pnpm --filter @email-tracker/worker ai backfill",
+    "ai:summarize": "pnpm --filter @email-tracker/worker ai summarize",
+    "ai:summarize-thread": "pnpm --filter @email-tracker/worker ai summarize-thread",
+    "ai:usage": "pnpm --filter @email-tracker/worker ai usage"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

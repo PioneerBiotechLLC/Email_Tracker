@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { disconnectDb, getDb, syncMailbox } from "@email-tracker/core";
+import { disconnectDb, getDb, hasAnthropicKey, summarizeThreads, syncMailbox } from "@email-tracker/core";
 
 const program = new Command()
   .name("sync-once")
@@ -7,7 +7,8 @@ const program = new Command()
   .argument("<email>", "registered mailbox address, or 'all' for every active mailbox")
   .option("--reset", "ignore saved delta links and re-run the full backfill", false)
   .option("--days <n>", "backfill window in days (default: BACKFILL_DAYS)", (v: string) => Number(v))
-  .action(async (email: string, opts: { reset: boolean; days?: number }) => {
+  .option("--no-ai", "skip Claude summaries for the touched threads")
+  .action(async (email: string, opts: { reset: boolean; days?: number; ai: boolean }) => {
     const db = getDb();
     const targets =
       email === "all"
@@ -30,6 +31,15 @@ const program = new Command()
       console.log(`  threads recomputed: ${stats.threadsRecomputed}`);
       console.log(`  totals in DB: ${totals[0]} inbound, ${totals[1]} outbound, ${totals[2]} threads`);
       console.log(`  took ${(stats.durationMs / 1000).toFixed(1)}s`);
+
+      if (!opts.ai) continue;
+      if (!hasAnthropicKey()) {
+        console.log("  AI summaries skipped: ANTHROPIC_API_KEY is not set");
+        continue;
+      }
+      if (!stats.touchedConversationIds.length) continue;
+      const ai = await summarizeThreads({ mailboxId: mb.id, conversationIds: stats.touchedConversationIds });
+      console.log(`  AI: ${ai.summarized} summarized, ${ai.errors} errors, skipped ${JSON.stringify(ai.skipped)}, cost $${ai.costUsd.toFixed(4)}${ai.capReached ? " [daily cap reached]" : ""}`);
     }
   });
 

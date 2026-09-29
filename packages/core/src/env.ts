@@ -11,8 +11,15 @@ const schema = z.object({
   GRAPH_WEBHOOK_URL: z.string().optional(),
   GRAPH_CLIENT_STATE: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
-  ANTHROPIC_MODEL: z.string().default("claude-opus-5-5"),
+  /** Main summarization model */
+  ANTHROPIC_MODEL: z.string().default("claude-sonnet-5-5"),
+  /** Optional cheaper model for very short threads (1–2 short messages) */
+  ANTHROPIC_MODEL_LIGHT: z.string().optional(),
   AI_MAX_CALLS_PER_DAY: z.coerce.number().int().positive().default(500),
+  /** Wait this long after the last message before summarizing (bursts → one call) */
+  AI_SUMMARY_DEBOUNCE_MINUTES: z.coerce.number().min(0).default(2),
+  /** Reasoning effort for models that support it (low keeps summaries cheap) */
+  AI_EFFORT: z.enum(["low", "medium", "high"]).default("low"),
   BACKFILL_DAYS: z.coerce.number().int().positive().default(90),
   REPLY_SLA_HOURS: z.coerce.number().positive().default(24),
   DIGEST_FROM_MAILBOX: z.string().optional(),

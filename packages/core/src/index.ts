@@ -19,3 +19,14 @@ export {
   type ReplyInputMessage, type ReplyResult, type DetectOptions, type ThreadState, type StatusOptions, type StatusResult,
 } from "./sync/replies.js";
 export { businessMinutesBetween, addBusinessMinutes, rawMinutesBetween, localParts, zonedTimeToUtc, DEFAULT_BUSINESS_HOURS, type BusinessHours } from "./sync/business-hours.js";
+export { getAnthropic, hasAnthropicKey, supportsEffort } from "./ai/client.js";
+export { PRICES, BATCH_DISCOUNT, priceFor, estimateCostUsd, estimateTokens, type TokenUsage, type ModelPrice } from "./ai/pricing.js";
+export { ThreadSummarySchema, SUMMARY_TOOL, SUMMARY_TOOL_NAME, CATEGORIES, PRIORITIES, LANGUAGES, type ThreadSummary } from "./ai/schema.js";
+export { systemPrompt, userMessage, buildThreadInput, formatMessageLine, formatLocalDate, DEFAULT_INPUT_TOKEN_BUDGET, type InputMessage, type BuiltInput } from "./ai/prompts.js";
+export {
+  summarizeThread, summarizeThreads, prepareThread, applySummaryToThread, decideSkip, applyNeedsReplyDecision, shouldCloseAsConcluded,
+  chooseModel, parseSummaryResponse, callSummary, summarizeWithRetry, buildMessageParams, countCallsToday, recordUsage, startOfLocalDay,
+  type SummarizeResult, type SummarizeManyResult, type SummaryClient, type SummaryRequest, type PreparedThread, type SkipReason,
+} from "./ai/summarize-thread.js";
+export { planBackfill, runBackfill, EST_OUTPUT_TOKENS, type BackfillPlan, type RunResult } from "./ai/backfill.js";
+export { usageReport, type UsageReport, type UsageRow } from "./ai/usage.js";

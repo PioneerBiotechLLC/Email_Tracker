@@ -23,6 +23,8 @@ export interface SyncStats {
   mailbox: string;
   folders: Record<SyncFolder, { pages: number; upserted: number; skippedDrafts: number; removed: number }>;
   threadsRecomputed: number;
+  /** conversation ids that received new/updated messages (for AI summarization) */
+  touchedConversationIds: string[];
   durationMs: number;
 }
 
@@ -108,6 +110,7 @@ export async function syncMailbox(mailboxId: string, opts: SyncOptions = {}): Pr
       sentitems: { pages: 0, upserted: 0, skippedDrafts: 0, removed: 0 },
     },
     threadsRecomputed: 0,
+    touchedConversationIds: [],
     durationMs: 0,
   };
 
@@ -154,6 +157,7 @@ export async function syncMailbox(mailboxId: string, opts: SyncOptions = {}): Pr
     stats.threadsRecomputed += 1;
   }
 
+  stats.touchedConversationIds = Array.from(touched);
   await db.mailbox.update({ where: { id: mailbox.id }, data: { lastSyncedAt: new Date() } });
   stats.durationMs = Date.now() - started;
   log.info("sync complete", { mailbox: mailbox.emailAddress, threads: stats.threadsRecomputed, ms: stats.durationMs });
