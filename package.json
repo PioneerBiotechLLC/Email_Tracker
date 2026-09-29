@@ -1,0 +1,20 @@
+{
+  "name": "email-tracker",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "scripts": {
+    "db:generate": "pnpm --filter @email-tracker/core db:generate",
+    "db:migrate": "pnpm --filter @email-tracker/core db:migrate",
+    "db:deploy": "pnpm --filter @email-tracker/core db:deploy",
+    "db:push": "pnpm --filter @email-tracker/core db:push",
+    "db:studio": "pnpm --filter @email-tracker/core db:studio",
+    "mailbox": "pnpm --filter @email-tracker/worker mailbox",
+    "sync:once": "pnpm --filter @email-tracker/worker sync:once",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

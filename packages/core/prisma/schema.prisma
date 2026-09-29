@@ -1,0 +1,200 @@
+// Outlook AI Email Tracker — data model (SPEC.md §4)
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+  runtime      = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ThreadStatus {
+  awaiting_us
+  awaiting_them
+  no_reply_needed
+  closed
+}
+
+enum ThreadCategory {
+  customer
+  supplier
+  internal
+  regulatory
+  finance
+  newsletter
+  notification
+  other
+}
+
+enum Priority {
+  low
+  normal
+  high
+  urgent
+}
+
+enum Direction {
+  inbound
+  outbound
+}
+
+enum MailFolder {
+  inbox
+  sent
+  other
+}
+
+enum ReplyMethod {
+  outlook_verb
+  header_match
+  conversation_match
+}
+
+enum UserRole {
+  admin
+  viewer
+}
+
+model Organization {
+  id              String   @id @default(cuid())
+  name            String
+  domain          String   @unique
+  azureTenantId   String
+  timezone        String   @default("Asia/Dubai")
+  summaryLanguage String   @default("en")
+  /// Free-form org settings: business hours, SLA override, digest recipients, etc.
+  settings        Json     @default("{}")
+  createdAt       DateTime @default(now())
+
+  mailboxes Mailbox[]
+  users     AppUser[]
+  digests   DigestLog[]
+}
+
+model Mailbox {
+  id                    String    @id @default(cuid())
+  orgId                 String
+  org                   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  emailAddress          String    @unique
+  /// Other addresses that count as "us" for this mailbox (proxy addresses / aliases), lowercase.
+  aliases               String[]  @default([])
+  displayName           String?
+  graphUserId           String
+  isActive              Boolean   @default(true)
+  inboxDeltaLink        String?
+  sentDeltaLink         String?
+  subscriptionId        String?
+  subscriptionExpiresAt DateTime?
+  lastSyncedAt          DateTime?
+  createdAt             DateTime  @default(now())
+
+  threads  Thread[]
+  messages Message[]
+}
+
+model Thread {
+  id                  String         @id @default(cuid())
+  mailboxId           String
+  mailbox             Mailbox        @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  conversationId      String
+  subject             String
+  normalizedSubject   String
+  firstMessageAt      DateTime
+  lastMessageAt       DateTime
+  messageCount        Int            @default(0)
+  participants        Json           @default("[]")
+  status              ThreadStatus   @default(awaiting_us)
+  needsReply          Boolean        @default(true)
+  category            ThreadCategory @default(other)
+  priority            Priority       @default(normal)
+  summary             String?
+  summaryLang         String?
+  keyPoints           Json?
+  asks                Json?
+  nextAction          String?
+  summaryUpdatedAt    DateTime?
+  summaryMessageCount Int            @default(0)
+  closedAt            DateTime?
+  closedBy            String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  messages Message[]
+
+  @@unique([mailboxId, conversationId])
+  @@index([mailboxId, status])
+  @@index([mailboxId, normalizedSubject])
+  @@index([mailboxId, lastMessageAt])
+}
+
+model Message {
+  id                      String      @id @default(cuid())
+  mailboxId               String
+  mailbox                 Mailbox     @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  threadId                String
+  thread                  Thread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  conversationId          String
+  /// Graph immutable message id
+  graphMessageId          String      @unique
+  internetMessageId       String?
+  inReplyTo               String?
+  references              String[]    @default([])
+  direction               Direction
+  folder                  MailFolder
+  fromAddress             String
+  fromName                String?
+  toAddresses             Json        @default("[]")
+  ccAddresses             Json        @default("[]")
+  subject                 String
+  receivedAt              DateTime
+  sentAt                  DateTime?
+  bodyPreview             String?
+  /// Cleaned "new content only" text, capped at 8000 chars. Encrypted when bodyEncrypted = true.
+  bodyText                String?
+  bodyEncrypted           Boolean     @default(false)
+  hasAttachments          Boolean     @default(false)
+  importance              String      @default("normal")
+  /// Out-of-office / auto-submitted message (not a real reply)
+  isAutoReply             Boolean     @default(false)
+  /// PidTagLastVerbExecuted: 102 reply, 103 reply-all, 104 forward
+  lastVerb                Int?
+  lastVerbAt              DateTime?
+  repliedAt               DateTime?
+  repliedByMessageId      String?
+  repliedBy               Message?    @relation("ReplyLink", fields: [repliedByMessageId], references: [id], onDelete: SetNull)
+  repliesTo               Message[]   @relation("ReplyLink")
+  replyMethod             ReplyMethod?
+  /// Raw wall-clock minutes between receivedAt and repliedAt
+  responseMinutes         Int?
+  /// Business-hours-aware minutes (org business hours)
+  responseBusinessMinutes Int?
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  @@index([mailboxId, conversationId])
+  @@index([threadId, receivedAt])
+  @@index([internetMessageId])
+  @@index([mailboxId, direction, repliedAt])
+  @@index([mailboxId, direction, receivedAt])
+}
+
+model DigestLog {
+  id         String       @id @default(cuid())
+  orgId      String
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  sentAt     DateTime     @default(now())
+  recipients Json
+  content    String
+}
+
+model AppUser {
+  id        String       @id @default(cuid())
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  email     String       @unique
+  role      UserRole     @default(viewer)
+  createdAt DateTime     @default(now())
+}
