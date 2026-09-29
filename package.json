@@ -25,7 +25,8 @@
     "test:e2e": "pnpm --filter @email-tracker/web test:e2e",
     "user": "pnpm --filter @email-tracker/worker user",
     "db:seed-demo": "pnpm --filter @email-tracker/core seed-demo",
-    "db:local": "pnpm --filter @email-tracker/core dev-db"
+    "db:local": "pnpm --filter @email-tracker/core dev-db",
+    "dev:lan": "pnpm --filter @email-tracker/web dev:lan"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

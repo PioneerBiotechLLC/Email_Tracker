@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "dev:lan": "next dev -H 0.0.0.0"
   },
   "dependencies": {
     "@email-tracker/core": "workspace:*",

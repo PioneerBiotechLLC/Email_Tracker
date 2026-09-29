@@ -22,6 +22,9 @@ export function loadDotenv(startDir: string = process.cwd()): string | null {
         if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
           value = value.slice(1, -1);
         }
+        // An empty `KEY=` line means "not configured": leave the variable unset so
+        // libraries that check for presence (e.g. Auth.js providers) use their defaults.
+        if (value === "") continue;
         if (process.env[key] === undefined) process.env[key] = value;
       }
       return candidate;
