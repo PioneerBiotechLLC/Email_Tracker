@@ -62,10 +62,14 @@ Auth is client-credentials (app-only) via MSAL; tokens are cached in memory and 
 
 ```bash
 pnpm install
-cp .env.example .env          # fill in DATABASE_URL and the AZURE_* values
-pnpm db:generate              # generate the Prisma client
-pnpm db:deploy                # apply migrations (or `pnpm db:migrate` during development)
+cp .env.example .env
+pnpm db:generate
+pnpm db:deploy
 ```
+
+Fill in `DATABASE_URL` and the `AZURE_*` values in `.env` first. `pnpm db:generate` generates the Prisma client; `pnpm db:deploy` applies migrations (`pnpm db:migrate` during development).
+
+**No Postgres yet?** `pnpm db:local` starts Prisma's built-in local Postgres (no Docker needed), writes its connection string into `.env` as `DATABASE_URL`, and keeps running until you press Ctrl+C. Data persists between runs. Use it for the demo data and local development; use Supabase/Neon for production.
 
 Optional: set `DATA_ENCRYPTION_KEY` (`openssl rand -base64 32`) and email bodies are stored AES-256-GCM encrypted. Without it they are stored in plaintext (previews and metadata are never encrypted).
 
@@ -176,23 +180,35 @@ Env vars (`.env`): `AUTH_SECRET` (`openssl rand -base64 32`), `AUTH_MICROSOFT_EN
 ### First admin user and running locally
 
 ```bash
-pnpm user add you@api-pharma.net --org api-pharma.net --role admin   # org must exist (created by `pnpm mailbox add`)
+pnpm user add you@api-pharma.net --org api-pharma.net --role admin
 pnpm user list
-pnpm user remove someone@api-pharma.net                               # deactivates (row kept for audit history)
-pnpm dev                                                              # http://localhost:3000
-pnpm build                                                            # production build (apps/web)
+pnpm user remove someone@api-pharma.net
+pnpm dev
+pnpm build
 ```
 
-Users can also be added, promoted and deactivated in Settings → Users once you are in.
+The organization must exist (it is created by `pnpm mailbox add` or `pnpm db:seed-demo`). `user remove` deactivates the user and keeps the row for audit history. `pnpm dev` serves http://localhost:3000; if that port is taken, run `PORT=3001 pnpm dev`. `pnpm build` is the production build of `apps/web`. Users can also be added, promoted and deactivated in Settings → Users once you are in.
 
 ### Demo data (no mailbox needed)
 
+Quickest way to see the dashboard, from a fresh clone (two terminals):
+
 ```bash
-pnpm db:seed-demo             # creates "Demo Pharma (DEMO DATA)" with 40 realistic threads (EN + AR) in every status
-pnpm db:seed-demo --remove    # deletes the demo org and everything under it
+# terminal 1 — local database (keeps running)
+pnpm install
+cp .env.example .env
+pnpm db:local
 ```
 
-The demo org is flagged `isDemo` (a banner shows at the top). Sign-in users: `demo-admin@demo-pharma.example` (admin) and `demo-viewer@demo-pharma.example` (viewer) — they only work with a real Microsoft account of that address, so for a local look use the Playwright bypass: run the dev server with `NODE_ENV=test E2E_BYPASS_EMAIL=demo-admin@demo-pharma.example pnpm dev`. That bypass is compiled out of production builds (see `apps/web/src/lib/e2e.ts`).
+```bash
+# terminal 2
+pnpm db:generate
+pnpm db:deploy
+pnpm db:seed-demo
+NODE_ENV=test E2E_BYPASS_EMAIL=demo-admin@demo-pharma.example pnpm dev
+```
+
+Then open http://localhost:3000 (or `PORT=3001 pnpm dev` if 3000 is busy). `pnpm db:seed-demo` creates "Demo Pharma (DEMO DATA)" with 40 realistic threads (English + Arabic) in every status; `pnpm db:seed-demo --remove` deletes the demo org and everything under it. The demo org is flagged `isDemo` and shows a banner. Its users (`demo-admin@demo-pharma.example`, admin; `demo-viewer@demo-pharma.example`, viewer) are not real Microsoft accounts, which is why the `NODE_ENV=test` bypass is used above; that bypass is compiled out of production builds (see `apps/web/src/lib/e2e.ts`).
 
 **What to expect:** Overview shows six KPI tiles (received, replied %, median and average business-hours response with wall-clock in the tooltip, awaiting, overdue), a received-vs-replied bar chart, a median-response-time line, awaiting-by-category bars, a slowest-senders table and the ten most overdue threads. Inbox Tracker highlights overdue rows in red and shows the reply method in small text under the response time. Thread detail shows inbound messages on the left, ours on the right, auto-replies greyed out, and the AI panel plus admin actions (Mark closed / Reopen, No reply needed / Needs reply, Re-summarize, manual category/priority). Settings has mailboxes (pause/resume, last sync, sync errors), business hours, SLA and summary language, branding (logo + primary color), digest recipients/time, AI usage this month and users.
 
@@ -216,6 +232,7 @@ pnpm --filter @email-tracker/web test:e2e   # Playwright smoke tests (seeds the 
 | Command | What it does |
 |---|---|
 | `pnpm db:generate` / `db:migrate` / `db:deploy` / `db:push` / `db:studio` | Prisma |
+| `pnpm db:local` | local Postgres (Prisma dev server), writes `DATABASE_URL` into `.env` |
 | `pnpm mailbox add <email> [--org-name] [--org-domain] [--tenant] [--alias …]` | register a mailbox |
 | `pnpm mailbox list` / `pause <email>` / `resume <email>` | manage mailboxes |
 | `pnpm sync:once <email\|all> [--reset] [--days N] [--no-ai]` | backfill / incremental sync, then AI summaries for touched threads |

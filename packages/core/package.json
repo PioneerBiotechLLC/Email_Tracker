@@ -15,7 +15,8 @@
     "test": "vitest run",
     "check:sync": "tsx scripts/fake-sync.ts",
     "typecheck": "tsc --noEmit",
-    "seed-demo": "tsx scripts/seed-demo.ts"
+    "seed-demo": "tsx scripts/seed-demo.ts",
+    "dev-db": "tsx scripts/dev-db.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
