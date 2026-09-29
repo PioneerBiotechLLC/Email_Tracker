@@ -30,3 +30,7 @@ export {
 } from "./ai/summarize-thread.js";
 export { planBackfill, runBackfill, EST_OUTPUT_TOKENS, type BackfillPlan, type RunResult } from "./ai/backfill.js";
 export { usageReport, type UsageReport, type UsageRow } from "./ai/usage.js";
+export { can, assertCan, assertSameOrg, mailboxScope, ForbiddenError, type Role, type Action, type SessionContext } from "./auth/permissions.js";
+export { logAudit, type AuditEntry } from "./auth/audit.js";
+export { computeKpis, bucketByDay, slowestSenders, worstStatus, inboundStatus, median, average, dayKey, senderKey, type InboundRow, type Kpis, type DayBucket, type SenderStat, type ThreadStatusName } from "./stats/kpis.js";
+export { requireGraphEnv } from "./env.js";

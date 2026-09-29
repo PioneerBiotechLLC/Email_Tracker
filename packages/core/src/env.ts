@@ -5,9 +5,10 @@ loadDotenv();
 
 const schema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
-  AZURE_TENANT_ID: z.string().min(1, "AZURE_TENANT_ID is required"),
-  AZURE_CLIENT_ID: z.string().min(1, "AZURE_CLIENT_ID is required"),
-  AZURE_CLIENT_SECRET: z.string().min(1, "AZURE_CLIENT_SECRET is required"),
+  // Required by the worker/CLI for Graph access; the web app can run without them.
+  AZURE_TENANT_ID: z.string().optional(),
+  AZURE_CLIENT_ID: z.string().optional(),
+  AZURE_CLIENT_SECRET: z.string().optional(),
   GRAPH_WEBHOOK_URL: z.string().optional(),
   GRAPH_CLIENT_STATE: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
@@ -28,6 +29,20 @@ const schema = z.object({
 });
 
 export type Env = z.infer<typeof schema>;
+
+export interface GraphEnv {
+  AZURE_TENANT_ID: string;
+  AZURE_CLIENT_ID: string;
+  AZURE_CLIENT_SECRET: string;
+}
+
+/** Graph credentials, required for anything that talks to Microsoft 365. */
+export function requireGraphEnv(): GraphEnv {
+  const e = getEnv();
+  const missing = (["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"] as const).filter((k) => !e[k]);
+  if (missing.length) throw new Error(`Missing Graph credentials: ${missing.join(", ")} (see .env.example)`);
+  return { AZURE_TENANT_ID: e.AZURE_TENANT_ID!, AZURE_CLIENT_ID: e.AZURE_CLIENT_ID!, AZURE_CLIENT_SECRET: e.AZURE_CLIENT_SECRET! };
+}
 
 let cached: Env | null = null;
 

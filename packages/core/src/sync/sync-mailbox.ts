@@ -96,6 +96,18 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
  */
 export async function syncMailbox(mailboxId: string, opts: SyncOptions = {}): Promise<SyncStats> {
   const db = getDb();
+  try {
+    const stats = await syncMailboxInner(db, mailboxId, opts);
+    await db.mailbox.update({ where: { id: mailboxId }, data: { lastSyncError: null, lastSyncErrorAt: null } });
+    return stats;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await db.mailbox.update({ where: { id: mailboxId }, data: { lastSyncError: message.slice(0, 500), lastSyncErrorAt: new Date() } }).catch(() => undefined);
+    throw err;
+  }
+}
+
+async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncOptions): Promise<SyncStats> {
   const started = Date.now();
   const mailbox = await db.mailbox.findUniqueOrThrow({ where: { id: mailboxId }, include: { org: true } });
   const provider = opts.provider ?? new GraphProvider(mailbox.org.azureTenantId);

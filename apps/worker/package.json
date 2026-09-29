@@ -8,7 +8,8 @@
     "sync:once": "tsx src/cli/sync-once.ts",
     "typecheck": "tsc --noEmit",
     "replies": "tsx src/cli/replies.ts",
-    "ai": "tsx src/cli/ai.ts"
+    "ai": "tsx src/cli/ai.ts",
+    "user": "tsx src/cli/user.ts"
   },
   "dependencies": {
     "@email-tracker/core": "workspace:*",

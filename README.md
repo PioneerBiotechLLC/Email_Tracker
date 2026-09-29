@@ -2,7 +2,7 @@
 
 Connects to Microsoft 365 mailboxes (read-only), tracks which inbound emails were replied to and how fast, summarizes threads with Claude, and shows it all on a dashboard with a daily digest. Full brief: [SPEC.md](SPEC.md).
 
-**Status: Phase 3 (AI summaries) complete** — on top of Phase 1 (monorepo, Prisma schema, Graph app-only auth, backfill CLI) and Phase 2 (reply tracking). Phases 4–7 (dashboard, live sync, digest, deploy) follow.
+**Status: Phase 4 (Dashboard) complete** — on top of Phase 1 (monorepo, Prisma schema, Graph app-only auth, backfill CLI), Phase 2 (reply tracking) and Phase 3 (AI summaries). Phases 5–7 (live sync, digest, deploy) follow.
 
 ## Hard rules
 
@@ -14,7 +14,7 @@ Connects to Microsoft 365 mailboxes (read-only), tracks which inbound emails wer
 
 ```
 apps/worker      CLI scripts now; sync + AI jobs (pg-boss) from Phase 5
-apps/web         Next.js dashboard + Graph webhook (Phase 4)
+apps/web         Next.js 15 dashboard (App Router, Tailwind, shadcn/ui, Recharts, Auth.js) + Graph webhook (Phase 5)
 packages/core    Prisma schema + client, Graph auth, MailProvider abstraction,
                  body cleaning, subject normalization, sync engine, (Phase 2) reply detection
 ```
@@ -151,6 +151,66 @@ The backfill uses Anthropic's Message Batches API: it submits all pending thread
 
 **Cost note.** With Sonnet, a typical 5-message thread (~1,500 input tokens + ~900 cached system-prompt tokens + ~450 output tokens) costs about $0.008 live or $0.004 via batch, so roughly **$4 per 1,000 threads batched** (about $8 live). Haiku for short threads halves that; Opus (`claude-opus-5-5`) doubles it. The dry-run prints the actual estimate for your data. Prices are in `packages/core/src/ai/pricing.ts` — update it when Anthropic changes pricing.
 
+## 6. Dashboard (Phase 4)
+
+A Next.js 15 app in [apps/web](apps/web/): Overview (KPIs, charts, needs-attention list), Inbox Tracker (one row per inbound email, sortable/searchable, CSV export), Threads (AI summary cards), Thread detail (chat-style timeline with reply info, AI panel, admin actions), By Subject (grouped view) and Settings (admin only). All reads go through `@email-tracker/core`; the reply/status/business-hours/summarize logic is reused, not duplicated.
+
+### Sign-in with Microsoft (Entra ID)
+
+The dashboard uses Auth.js with the Microsoft Entra ID provider (delegated login). Only emails in the `AppUser` table can sign in; everyone else gets a "No access" page. Roles: **admin** (everything) and **viewer** (read-only, no actions, no settings). Every query is scoped to the user's organization.
+
+You need an app registration with a **web redirect URI**. Two options:
+
+1. **Same app as the mail reader** (`Email Tracker`): Authentication → Add a platform → Web → redirect URIs below. Keep the existing application permissions; add the delegated `openid`, `profile`, `email`, `User.Read` (added automatically on first sign-in consent). Reuse the client id/secret.
+2. **Separate app** (cleaner separation between the read-only mail app and user login): register `Email Tracker Dashboard`, single tenant, Web platform, same redirect URIs, and a client secret. No application permissions at all.
+
+Redirect URIs (add both when you use one app for local and production):
+
+```
+http://localhost:3000/api/auth/callback/microsoft-entra-id
+https://<your-dashboard-domain>/api/auth/callback/microsoft-entra-id
+```
+
+Env vars (`.env`): `AUTH_SECRET` (`openssl rand -base64 32`), `AUTH_MICROSOFT_ENTRA_ID_ID`, `AUTH_MICROSOFT_ENTRA_ID_SECRET`, `AUTH_MICROSOFT_ENTRA_ID_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0`, and in production `AUTH_URL=https://<your-dashboard-domain>`. The web app only needs `DATABASE_URL` and the `AUTH_*` values (plus `ANTHROPIC_API_KEY` for the Re-summarize button); the `AZURE_*` Graph credentials are only used by the worker/CLI.
+
+### First admin user and running locally
+
+```bash
+pnpm user add you@api-pharma.net --org api-pharma.net --role admin   # org must exist (created by `pnpm mailbox add`)
+pnpm user list
+pnpm user remove someone@api-pharma.net                               # deactivates (row kept for audit history)
+pnpm dev                                                              # http://localhost:3000
+pnpm build                                                            # production build (apps/web)
+```
+
+Users can also be added, promoted and deactivated in Settings → Users once you are in.
+
+### Demo data (no mailbox needed)
+
+```bash
+pnpm db:seed-demo             # creates "Demo Pharma (DEMO DATA)" with 40 realistic threads (EN + AR) in every status
+pnpm db:seed-demo --remove    # deletes the demo org and everything under it
+```
+
+The demo org is flagged `isDemo` (a banner shows at the top). Sign-in users: `demo-admin@demo-pharma.example` (admin) and `demo-viewer@demo-pharma.example` (viewer) — they only work with a real Microsoft account of that address, so for a local look use the Playwright bypass: run the dev server with `NODE_ENV=test E2E_BYPASS_EMAIL=demo-admin@demo-pharma.example pnpm dev`. That bypass is compiled out of production builds (see `apps/web/src/lib/e2e.ts`).
+
+**What to expect:** Overview shows six KPI tiles (received, replied %, median and average business-hours response with wall-clock in the tooltip, awaiting, overdue), a received-vs-replied bar chart, a median-response-time line, awaiting-by-category bars, a slowest-senders table and the ten most overdue threads. Inbox Tracker highlights overdue rows in red and shows the reply method in small text under the response time. Thread detail shows inbound messages on the left, ours on the right, auto-replies greyed out, and the AI panel plus admin actions (Mark closed / Reopen, No reply needed / Needs reply, Re-summarize, manual category/priority). Settings has mailboxes (pause/resume, last sync, sync errors), business hours, SLA and summary language, branding (logo + primary color), digest recipients/time, AI usage this month and users.
+
+### Notes
+
+- Filters (mailbox, range, category, priority, status, search, sort, page) live in the URL, so views are shareable.
+- All times are shown in the organization timezone as "Tue 29 Sep, 14:05".
+- Every admin action is written to `AuditLog` (who, what, when, before/after). Manual category/priority choices set `categoryManual`/`priorityManual`, which the AI never overwrites.
+- Decrypted email bodies are only sent to the browser on the thread detail page; nothing logs bodies.
+- Branding defaults: primary `#BE272C`, secondary `#BE6B27`, accent `#21A396`; Merriweather headings, Source Sans 3 body. Status colors (green/amber/red) are independent of the brand color, and status is always shown as text too.
+
+### Tests
+
+```bash
+pnpm test                       # vitest: core logic incl. KPI aggregations and permission checks
+pnpm --filter @email-tracker/web test:e2e   # Playwright smoke tests (seeds the demo org, needs DATABASE_URL; run `pnpm exec playwright install chromium` once)
+```
+
 ## Commands
 
 | Command | What it does |
@@ -165,6 +225,10 @@ The backfill uses Anthropic's Message Batches API: it submits all pending thread
 | `pnpm ai:summarize <email\|all> [--limit N]` | live summaries for threads with new messages |
 | `pnpm ai:summarize-thread <threadId> [--force]` | summarize one thread, print JSON |
 | `pnpm ai:usage [--days 30]` | Claude calls, tokens and cost |
+| `pnpm user add <email> --org <domain> --role admin\|viewer` / `user list` / `user remove <email>` | dashboard users |
+| `pnpm dev` / `pnpm build` / `pnpm start` | web dashboard |
+| `pnpm db:seed-demo [--remove]` | demo organization with 40 fake threads |
+| `pnpm --filter @email-tracker/web test:e2e` | Playwright smoke tests |
 | `pnpm test` | unit tests (vitest) |
 | `pnpm --filter @email-tracker/core check:sync` | end-to-end sync check against your DB using a fake mail provider (no Graph needed) |
 | `pnpm typecheck` | TypeScript across the workspace |
@@ -172,5 +236,7 @@ The backfill uses Anthropic's Message Batches API: it submits all pending thread
 ## Environment variables
 
 See [.env.example](.env.example). Required: `DATABASE_URL`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Optional: `BACKFILL_DAYS` (90), `REPLY_SLA_HOURS` (24, business hours; per-org override via `Organization.replySlaHours`), `DATA_ENCRYPTION_KEY`, `LOG_LEVEL` (`debug|info|warn|error`).
+
+Dashboard: `AUTH_SECRET`, `AUTH_MICROSOFT_ENTRA_ID_ID`, `AUTH_MICROSOFT_ENTRA_ID_SECRET`, `AUTH_MICROSOFT_ENTRA_ID_ISSUER`, `AUTH_URL` (production).
 
 AI: `ANTHROPIC_API_KEY` (required for summaries), `ANTHROPIC_MODEL` (`claude-sonnet-5-5`), `ANTHROPIC_MODEL_LIGHT` (optional, e.g. `claude-haiku-4-5`), `AI_MAX_CALLS_PER_DAY` (500, per org per day), `AI_SUMMARY_DEBOUNCE_MINUTES` (2), `AI_EFFORT` (`low`).

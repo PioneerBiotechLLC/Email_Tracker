@@ -1,5 +1,5 @@
 import { ConfidentialClientApplication } from "@azure/msal-node";
-import { getEnv } from "../env.js";
+import { requireGraphEnv } from "../env.js";
 
 const GRAPH_SCOPES = ["https://graph.microsoft.com/.default"];
 
@@ -14,7 +14,7 @@ const apps = new Map<string, ConfidentialClientApplication>();
 export function getMsalApp(tenantId: string): ConfidentialClientApplication {
   let app = apps.get(tenantId);
   if (!app) {
-    const env = getEnv();
+    const env = requireGraphEnv();
     app = new ConfidentialClientApplication({
       auth: {
         clientId: env.AZURE_CLIENT_ID,

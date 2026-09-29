@@ -18,7 +18,13 @@
     "ai:backfill": "pnpm --filter @email-tracker/worker ai backfill",
     "ai:summarize": "pnpm --filter @email-tracker/worker ai summarize",
     "ai:summarize-thread": "pnpm --filter @email-tracker/worker ai summarize-thread",
-    "ai:usage": "pnpm --filter @email-tracker/worker ai usage"
+    "ai:usage": "pnpm --filter @email-tracker/worker ai usage",
+    "dev": "pnpm --filter @email-tracker/web dev",
+    "build": "pnpm --filter @email-tracker/web build",
+    "start": "pnpm --filter @email-tracker/web start",
+    "test:e2e": "pnpm --filter @email-tracker/web test:e2e",
+    "user": "pnpm --filter @email-tracker/worker user",
+    "db:seed-demo": "pnpm --filter @email-tracker/core seed-demo"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

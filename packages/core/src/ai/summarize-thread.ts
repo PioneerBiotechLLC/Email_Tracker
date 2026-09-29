@@ -226,7 +226,7 @@ export async function recordUsage(db: PrismaClient, orgId: string, threadId: str
 
 /** Persists a validated summary, applies the needs-reply / concluded rules, and recomputes status. */
 export async function applySummaryToThread(db: PrismaClient, threadId: string, summary: ThreadSummary, model: string, messageCount: number, now = new Date()): Promise<{ status: string }> {
-  const thread = await db.thread.findUniqueOrThrow({ where: { id: threadId }, select: { mailboxId: true, conversationId: true, needsReply: true, needsReplyDecidedBy: true } });
+  const thread = await db.thread.findUniqueOrThrow({ where: { id: threadId }, select: { mailboxId: true, conversationId: true, needsReply: true, needsReplyDecidedBy: true, categoryManual: true, priorityManual: true } });
   const decision = applyNeedsReplyDecision(thread, summary);
   await db.thread.update({
     where: { id: threadId },
@@ -235,8 +235,9 @@ export async function applySummaryToThread(db: PrismaClient, threadId: string, s
       keyPoints: summary.key_points,
       asks: summary.asks as unknown as Prisma.InputJsonValue,
       nextAction: summary.next_action,
-      category: summary.category,
-      priority: summary.priority,
+      // Manual classifications set in the dashboard win over the AI.
+      ...(thread.categoryManual ? {} : { category: summary.category }),
+      ...(thread.priorityManual ? {} : { priority: summary.priority }),
       summaryLang: summary.language,
       summaryUpdatedAt: now,
       summaryMessageCount: messageCount,

@@ -78,7 +78,16 @@ model Organization {
   /// Overrides REPLY_SLA_HOURS for this org when set (business hours)
   replySlaHours   Float?
   summaryLanguage String   @default("en")
-  /// Free-form org settings: business hours, SLA override, digest recipients, etc.
+  /// Branding for the dashboard
+  logoUrl         String?
+  primaryColor    String   @default("#BE272C")
+  /// Daily digest (sent in Phase 6): recipients and local send time
+  digestRecipients String[] @default([])
+  digestHour      Int      @default(8)
+  digestMinute    Int      @default(0)
+  /// Demo organizations are created by `pnpm db:seed-demo` and can be removed with --remove
+  isDemo          Boolean  @default(false)
+  /// Free-form org settings
   settings        Json     @default("{}")
   createdAt       DateTime @default(now())
 
@@ -86,6 +95,7 @@ model Organization {
   users     AppUser[]
   digests   DigestLog[]
   aiUsage   AiUsage[]
+  auditLogs AuditLog[]
 }
 
 model Mailbox {
@@ -103,6 +113,9 @@ model Mailbox {
   subscriptionId        String?
   subscriptionExpiresAt DateTime?
   lastSyncedAt          DateTime?
+  /// Last sync failure message (cleared on the next successful sync)
+  lastSyncError         String?
+  lastSyncErrorAt       DateTime?
   createdAt             DateTime  @default(now())
 
   threads  Thread[]
@@ -124,6 +137,9 @@ model Thread {
   needsReply          Boolean        @default(true)
   category            ThreadCategory @default(other)
   priority            Priority       @default(normal)
+  /// Set by hand in the dashboard; the AI must not overwrite these
+  categoryManual      Boolean        @default(false)
+  priorityManual      Boolean        @default(false)
   summary             String?
   summaryLang         String?
   keyPoints           Json?
@@ -240,6 +256,27 @@ model AppUser {
   orgId     String
   org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   email     String       @unique
+  name      String?
   role      UserRole     @default(viewer)
+  /// Deactivated users keep their row (audit history) but cannot sign in
+  isActive  Boolean      @default(true)
+  lastLoginAt DateTime?
   createdAt DateTime     @default(now())
+}
+
+/// Every dashboard action (who, what, when, before/after)
+model AuditLog {
+  id         String       @id @default(cuid())
+  orgId      String
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userEmail  String
+  action     String
+  targetType String
+  targetId   String
+  before     Json?
+  after      Json?
+  createdAt  DateTime     @default(now())
+
+  @@index([orgId, createdAt])
+  @@index([targetType, targetId])
 }
