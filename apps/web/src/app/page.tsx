@@ -2,6 +2,10 @@ import { redirect } from "next/navigation";
 import { pickOrg } from "@email-tracker/core";
 import { getSession, getVisibleCompanies, rememberedCompanySlug } from "@/lib/session";
 
+// Always per-request: depends on the session cookie, and must not be prerendered at build time
+// (the build environment has no database URL).
+export const dynamic = "force-dynamic";
+
 /** Opens the last-used company (cookie), else the first one the user belongs to. */
 export default async function RootPage() {
   const session = await getSession();
