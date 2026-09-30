@@ -38,7 +38,8 @@ const program = new Command()
       console.log(`\n${stats.mailbox}`);
       console.log(`  inbox:      ${inbox.upserted} upserted, ${inbox.skippedDrafts} drafts skipped, ${inbox.removed} removed, ${inbox.pages} pages`);
       console.log(`  sent items: ${sent.upserted} upserted, ${sent.skippedDrafts} drafts skipped, ${sent.removed} removed, ${sent.pages} pages`);
-      console.log(`  threads recomputed: ${stats.threadsRecomputed}`);
+      console.log(`  threads recomputed: ${stats.threadsRecomputed}${stats.siblingThreadsRecomputed ? ` (+${stats.siblingThreadsRecomputed} in other mailboxes of the company)` : ""}`);
+      if (stats.duplicates) console.log(`  copies of emails already tracked in another mailbox: ${stats.duplicates} (hidden from "All mailboxes")`);
       console.log(`  totals in DB: ${totals[0]} inbound, ${totals[1]} outbound, ${totals[2]} threads`);
       console.log(`  took ${(stats.durationMs / 1000).toFixed(1)}s`);
 

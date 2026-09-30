@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { disconnectDb, getDb, recomputeMailboxThreads, type PrismaClient } from "@email-tracker/core";
+import { dedupeOrgMessages, disconnectDb, getDb, recomputeMailboxThreads, type PrismaClient } from "@email-tracker/core";
 
 const program = new Command().name("replies").description("Reply-tracking maintenance and reports");
 
@@ -11,11 +11,21 @@ async function targets(db: PrismaClient, email: string) {
 
 program
   .command("recompute")
-  .description("Re-run reply detection and status for every thread of a mailbox (after backfill or rule changes)")
+  .description("Re-link copies of the same email across the company's mailboxes, then re-run reply detection and status for every thread (after backfill, a new mailbox, or rule changes)")
   .argument("<email>", "mailbox address or 'all'")
-  .action(async (email: string) => {
+  .option("--no-dedupe", "skip the duplicate / internal-recipient pass")
+  .action(async (email: string, opts: { dedupe: boolean }) => {
     const db = getDb();
-    for (const mb of await targets(db, email)) {
+    const mailboxes = await targets(db, email);
+    if (opts.dedupe) {
+      for (const orgId of new Set(mailboxes.map((m) => m.orgId))) {
+        const org = mailboxes.find((m) => m.orgId === orgId)!.org;
+        const started = Date.now();
+        const r = await dedupeOrgMessages(db, orgId, (done, total) => { if (done % 5000 === 0) console.log(`  ${org.domain}: ${done}/${total} messages scanned`); });
+        console.log(`${org.domain}: ${r.messages} messages scanned, ${r.recipientsUpdated} internal-recipient lists updated, ${r.groups} emails held by more than one mailbox, ${r.duplicates} copies linked (${r.linksChanged} links changed) in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      }
+    }
+    for (const mb of mailboxes) {
       const started = Date.now();
       const r = await recomputeMailboxThreads(db, mb.id, (done, total) => console.log(`  ${mb.emailAddress}: ${done}/${total} threads`));
       const by = Object.entries(r.byStatus).map(([k, v]) => `${k}=${v}`).join(", ");

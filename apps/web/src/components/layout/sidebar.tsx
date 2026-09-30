@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
-import { BarChart3, Building2, ChevronsUpDown, Inbox, Layers, MessagesSquare, Settings } from "lucide-react";
+import { BarChart3, Building2, ChevronsUpDown, Inbox, Layers, MessagesSquare, Settings, Sparkles } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { rememberCompany } from "@/app/c/company-cookie";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ const NAV = [
   { href: "/tracker", label: "Inbox Tracker", icon: Inbox },
   { href: "/threads", label: "Threads", icon: MessagesSquare },
   { href: "/subjects", label: "By Subject", icon: Layers },
+  { href: "/summary", label: "Summary", icon: Sparkles },
   { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
 

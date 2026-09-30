@@ -31,6 +31,22 @@ const byId = (rs: ReplyResult[], id: string) => rs.find((r) => r.messageId === i
 const fresh: ThreadState = { status: "awaiting_us", needsReply: true, closedAt: null };
 
 describe("detectReplies", () => {
+  it("a colleague's sent mail (another mailbox of the company) counts as the reply, headers or conversation", () => {
+    const m = inbound({ id: "cc", receivedAt: dxb("2026-09-28T10:00:00"), ccAddresses: [{ address: "regulatory@api-pharma.net" }] });
+    const colleagueHeader = outbound({ id: "reg1", sentAt: dxb("2026-09-28T12:00:00"), fromAddress: "regulatory@api-pharma.net", inReplyTo: "<cc@customer.com>" });
+    const byHeader = byId(detectReplies([m], { ...opts, extraOutbound: [colleagueHeader] }), "cc");
+    expect(byHeader.replyMethod).toBe("header_match");
+    expect(byHeader.repliedByMessageId).toBe("reg1");
+    expect(byHeader.responseMinutes).toBe(120);
+    const colleagueConv = outbound({ id: "reg2", sentAt: dxb("2026-09-28T13:00:00"), fromAddress: "regulatory@api-pharma.net" });
+    const byConv = byId(detectReplies([m], { ...opts, extraOutbound: [colleagueConv] }), "cc");
+    expect(byConv.replyMethod).toBe("conversation_match");
+    // our own copy, an auto-reply, or mail sent before receipt never count
+    const ownCopy = { ...colleagueHeader, id: "cc" };
+    expect(byId(detectReplies([m], { ...opts, extraOutbound: [ownCopy] }), "cc").repliedAt).toBeNull();
+    expect(byId(detectReplies([m], { ...opts, extraOutbound: [{ ...colleagueHeader, isAutoReply: true }] }), "cc").repliedAt).toBeNull();
+    expect(byId(detectReplies([m], { ...opts, extraOutbound: [{ ...colleagueHeader, sentAt: dxb("2026-09-28T09:00:00"), receivedAt: dxb("2026-09-28T09:00:00") }] }), "cc").repliedAt).toBeNull();
+  });
   it("reply via Outlook verb 102 (no sent copy)", () => {
     const m = inbound({ id: "a", receivedAt: dxb("2026-09-28T10:00:00"), lastVerb: 102, lastVerbAt: dxb("2026-09-28T11:30:00") });
     const r = byId(detectReplies([m], opts), "a");

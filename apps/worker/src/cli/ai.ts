@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { disconnectDb, getDb, hasAnthropicKey, planBackfill, runBackfill, summarizeThread, summarizeThreads, usageReport, getEnv, type PrismaClient } from "@email-tracker/core";
+import { disconnectDb, getDb, hasAnthropicKey, isSummaryPeriod, planBackfill, runBackfill, summarizePeriod, summarizeThread, summarizeThreads, usageReport, getEnv, PERIOD_LABEL, type PrismaClient } from "@email-tracker/core";
 
 const program = new Command().name("ai").description("Claude thread summaries: backfill, live summarize, usage");
 
@@ -61,6 +61,43 @@ program
     if (!hasAnthropicKey()) throw new Error("ANTHROPIC_API_KEY is not set");
     const r = await summarizeThread(threadId, { force: opts.force });
     console.log(JSON.stringify(r, null, 2));
+  });
+
+program
+  .command("period")
+  .description("Very short digest of everything sent and received today / last 7 days / last 30 days, for one mailbox or all mailboxes of a company")
+  .argument("<email>", "mailbox address, or 'all' for every mailbox of the company (--org)")
+  .option("--period <p>", "day | week | month", "week")
+  .option("--org <domain>", "company domain (required with 'all' when more than one company exists)")
+  .action(async (email: string, opts: { period: string; org?: string }) => {
+    const db = getDb();
+    if (!hasAnthropicKey()) throw new Error("ANTHROPIC_API_KEY is not set");
+    if (!isSummaryPeriod(opts.period)) throw new Error("--period must be day, week or month");
+    let orgId: string;
+    let mailboxId: string | null = null;
+    if (email === "all") {
+      const orgs = opts.org ? await db.organization.findMany({ where: { OR: [{ domain: opts.org.toLowerCase() }, { slug: opts.org.toLowerCase() }] } }) : await db.organization.findMany();
+      if (orgs.length !== 1) throw new Error(orgs.length ? `Several companies in this database — pass --org <domain>: ${orgs.map((o) => o.domain).join(", ")}` : `No company found${opts.org ? ` for ${opts.org}` : ""}`);
+      orgId = orgs[0]!.id;
+    } else {
+      const mb = await db.mailbox.findUniqueOrThrow({ where: { emailAddress: email.toLowerCase() } });
+      orgId = mb.orgId;
+      mailboxId = mb.id;
+    }
+    const r = await summarizePeriod({ orgId, mailboxId, period: opts.period, createdBy: "cli" });
+    const st = r.stats;
+    if (st) console.log(`\n${PERIOD_LABEL[opts.period]} — ${email}: ${st.received} received, ${st.sent} sent, ${st.replied} answered, ${st.awaiting} awaiting our reply (${st.overdue} overdue), ${st.threads} threads`);
+    if (r.outcome !== "summarized" || !r.record) {
+      console.log(`Not generated: ${r.outcome}${r.reason ? ` (${r.reason})` : ""}`);
+      return;
+    }
+    const rec = r.record;
+    const bullets = (title: string, xs: unknown) => { const list = Array.isArray(xs) ? (xs as string[]) : []; console.log(`\n${title}:`); list.length ? list.forEach((x) => console.log(`  • ${x}`)) : console.log("  (nothing)"); };
+    console.log(`\n${rec.overview}`);
+    bullets("Received", rec.received);
+    bullets("Sent", rec.sent);
+    bullets("Needs attention", rec.needsAttention);
+    console.log(`\nmodel ${rec.model}, cost ${usd(rec.costUsd)}, ${rec.includedCount}/${rec.threadCount} threads shown to the model. Stored; visible on the dashboard's Summary page.`);
   });
 
 program

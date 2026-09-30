@@ -70,6 +70,13 @@ enum BodyStorage {
   preview_only
 }
 
+/// Window covered by an AI period summary (rolling: today / last 7 days / last 30 days)
+enum SummaryPeriod {
+  day
+  week
+  month
+}
+
 model Organization {
   id              String   @id @default(cuid())
   name            String
@@ -119,6 +126,7 @@ model Organization {
   digests     DigestLog[]
   aiUsage     AiUsage[]
   auditLogs   AuditLog[]
+  periodSummaries PeriodSummary[]
 }
 
 model Mailbox {
@@ -145,6 +153,7 @@ model Mailbox {
 
   threads  Thread[]
   messages Message[]
+  periodSummaries PeriodSummary[]
 }
 
 model Thread {
@@ -184,12 +193,19 @@ model Thread {
   overdueAt           DateTime?
   closedAt            DateTime?
   closedBy            String?
+  /// Set when EVERY message of this thread is a copy (same Message-ID, e.g. we were CC'd) of messages in one
+  /// thread of another mailbox in the same company. Copy threads are hidden from the "All mailboxes" views and
+  /// inherit that thread's AI summary instead of being summarized again.
+  duplicateOfId       String?
+  duplicateOf         Thread?        @relation("DuplicateThread", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates          Thread[]       @relation("DuplicateThread")
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
   messages Message[]
 
   @@unique([mailboxId, conversationId])
+  @@index([duplicateOfId])
   @@index([mailboxId, status])
   @@index([mailboxId, status, overdueAt])
   @@index([mailboxId, normalizedSubject])
@@ -237,12 +253,21 @@ model Message {
   responseMinutes         Int?
   /// Business-hours-aware minutes (org business hours)
   responseBusinessMinutes Int?
+  /// To/Cc addresses that belong to the company's own domains (other than this mailbox itself), lowercase.
+  /// Detected at sync time: "who else in our company got this email".
+  internalRecipients      String[]    @default([])
+  /// The same email (same Message-ID and direction) is also tracked in another mailbox of this company;
+  /// this row is the secondary copy. Copies are hidden from "All mailboxes" views and statistics.
+  duplicateOfId           String?
+  duplicateOf             Message?    @relation("DuplicateCopy", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates              Message[]   @relation("DuplicateCopy")
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
   @@index([mailboxId, conversationId])
   @@index([threadId, receivedAt])
   @@index([internetMessageId])
+  @@index([duplicateOfId])
   @@index([mailboxId, direction, repliedAt])
   @@index([mailboxId, direction, receivedAt])
 }
@@ -254,6 +279,38 @@ model DigestLog {
   sentAt     DateTime     @default(now())
   recipients Json
   content    String
+}
+
+/// A very short AI digest of everything sent and received in a rolling window, for one mailbox or all of them.
+model PeriodSummary {
+  id             String        @id @default(cuid())
+  orgId          String
+  org            Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  /// null = all mailboxes of the company
+  mailboxId      String?
+  mailbox        Mailbox?      @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  /// mailboxId or "all" (nullable columns cannot take part in a unique key)
+  scopeKey       String
+  period         SummaryPeriod
+  periodStart    DateTime
+  periodEnd      DateTime
+  language       String
+  overview       String
+  received       Json          @default("[]")
+  sent           Json          @default("[]")
+  needsAttention Json          @default("[]")
+  /// Deterministic counts computed from the database (never from the model)
+  stats          Json          @default("{}")
+  /// Threads active in the window / included in the prompt
+  threadCount    Int           @default(0)
+  includedCount  Int           @default(0)
+  model          String
+  costUsd        Float         @default(0)
+  createdBy      String?
+  createdAt      DateTime      @default(now())
+
+  @@unique([orgId, scopeKey, period, periodStart])
+  @@index([orgId, scopeKey, period, createdAt])
 }
 
 /// One row per Claude API call (live or batch), for cost tracking and the daily cap.

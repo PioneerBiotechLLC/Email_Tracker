@@ -43,6 +43,12 @@ export interface DetectOptions {
   /** Lower-cased addresses that count as "us" (mailbox address + aliases) */
   owners: Set<string>;
   businessHours: BusinessHours;
+  /**
+   * Outbound messages from OTHER tracked mailboxes of the same company that belong
+   * to this conversation (or reference its Message-IDs). When a colleague answers an
+   * email we were Cc'd on, that answer counts as the reply here too.
+   */
+  extraOutbound?: ReplyInputMessage[];
 }
 
 export const REPLY_VERBS = new Set([102, 103]);
@@ -118,10 +124,16 @@ function emptyResult(id: string): ReplyResult {
 /**
  * Decides repliedAt / repliedBy / method for every message of ONE thread.
  * Rules, first match wins: Outlook verb → header match → conversation match.
- * Outbound, auto-reply and own-address messages get an empty result.
+ * Outbound, auto-reply and own-address messages get an empty result. Sent
+ * messages of other mailboxes in the company (`extraOutbound`) are reply
+ * candidates too, so an email a colleague answered is not "waiting" for us.
  */
 export function detectReplies(messages: ReplyInputMessage[], opts: DetectOptions): ReplyResult[] {
-  const outbound = messages.filter((m) => isRealOutbound(m, opts.owners)).sort(byTime);
+  const own = new Set(messages.map((m) => m.id));
+  const outbound = [
+    ...messages.filter((m) => isRealOutbound(m, opts.owners)),
+    ...(opts.extraOutbound ?? []).filter((m) => m.direction === "outbound" && !m.isAutoReply && !own.has(m.id)),
+  ].sort(byTime);
 
   return messages.map((m) => {
     if (!isRealInbound(m, opts.owners)) return emptyResult(m.id);

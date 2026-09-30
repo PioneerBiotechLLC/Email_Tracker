@@ -59,6 +59,27 @@ test("by-subject groups expand and settings are reachable for admins", async ({ 
   await expect(page.getByText("Users", { exact: true })).toBeVisible();
 });
 
+test("summary page shows period figures and the generate button; copies are hidden across mailboxes", async ({ page }) => {
+  await page.goto(`${C}/summary?period=month`);
+  await expect(page.getByRole("heading", { name: "Summary" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Last 30 days" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByText("Received", { exact: true })).toBeVisible();
+  await expect(page.getByText("Sent", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("generate-summary")).toBeVisible(); // disabled without ANTHROPIC_API_KEY, enabled otherwise
+  await page.getByRole("link", { name: "Today" }).click();
+  await expect(page).toHaveURL(/period=day/);
+  // The Cc'd mailbox holds copies of "PO 4512"; across all mailboxes the thread is listed once.
+  await page.goto(`${C}/threads?range=90d&q=PO+4512`);
+  await expect(page.getByTestId("thread-list").getByRole("link", { name: /PO 4512 – Amoxicillin/ })).toHaveCount(1);
+  await page.goto(`${C}/threads?range=90d&q=PO+4512&mailbox=all`);
+  const regulatory = await page.locator("select[aria-label='Mailbox'] option", { hasText: "regulatory@" }).getAttribute("value");
+  await page.goto(`${C}/threads?range=90d&q=PO+4512&mailbox=${regulatory}`);
+  await page.getByTestId("thread-list").getByRole("link", { name: /PO 4512 – Amoxicillin/ }).click();
+  await expect(page.getByTestId("duplicate-notice")).toContainText("sales@demo-pharma.example");
+  await page.getByRole("link", { name: "Open the primary thread" }).click();
+  await expect(page.getByText("also received by")).toBeVisible();
+});
+
 test("company switcher lists the user's companies and Companies is owner-only", async ({ page }) => {
   await page.goto(C);
   await page.getByRole("button", { name: "Switch company" }).click();

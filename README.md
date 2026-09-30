@@ -2,7 +2,7 @@
 
 Connects to Microsoft 365 mailboxes (read-only), tracks which inbound emails were replied to and how fast, summarizes threads with Claude, and shows it all on a dashboard with a daily digest. Full brief: [SPEC.md](SPEC.md).
 
-**Status: Phase 5 (multi-company + go live) complete** — multiple companies on different Microsoft 365 tenants with a company switcher, serverless live sync (Graph webhooks + cron endpoints) and a Vercel/Neon deployment path. See [docs/DEPLOY.md](docs/DEPLOY.md) for the go-live checklist. The daily digest (Phase 6) is still to come.
+**Status: Phase 5 (multi-company + go live) complete**, plus copy detection across mailboxes and on-demand period summaries (section 8) — multiple companies on different Microsoft 365 tenants with a company switcher, serverless live sync (Graph webhooks + cron endpoints) and a Vercel/Neon deployment path. See [docs/DEPLOY.md](docs/DEPLOY.md) for the go-live checklist. The emailed daily digest (Phase 6) is still to come.
 
 ## Hard rules
 
@@ -248,6 +248,34 @@ pnpm mailbox add sales@pbio.tech --tenant <tenant-id>
 pnpm --filter @email-tracker/core check:migration   # replays the AppUser → Membership migration in a scratch schema
 ```
 
+## 8. Copies across mailboxes and period summaries
+
+### One email, several mailboxes (Cc'd colleagues)
+
+When two tracked mailboxes both receive an email (sales@ in To, regulatory@ in Cc), Microsoft 365 gives each mailbox its own copy and its own Graph id. Without help the tracker would count the email twice, show the thread twice and pay for two AI summaries. The sync now:
+
+- Records on every message which **other addresses inside the company's domains** (`Organization.domain` + `domains`) were in To/Cc: `Message.internalRecipients`. The thread page shows it as "Also to (in-company): …".
+- Links copies by their **RFC Message-ID**: one copy is the *primary* (the mailbox that was addressed directly wins over a Cc'd one; the sender's Sent Items copy wins for outgoing mail; ties go to the mailbox registered first) and the others get `duplicateOfId`. A colleague's reply-all that lands in a mailbox that was only Cc'd is a copy of the colleague's Sent Items row; an internal email addressed *To* a mailbox stays a real inbound request.
+- Marks a thread whose messages are **all** copies of one thread in another mailbox as a copy of that thread (`Thread.duplicateOfId`). Copy threads inherit the primary thread's AI summary instead of being summarized again.
+- Treats **sent mail from any tracked mailbox of the company** as a reply candidate (headers or conversation match): an email a colleague answered is not "waiting for us". The tracker shows the answering mailbox.
+- Hides copies from the **All mailboxes** views and statistics (`mailboxScope` adds `duplicateOfId = null`). A single-mailbox view still shows everything that landed in that mailbox, with a "copy" notice linking to the primary thread.
+
+After deploying this version (or after adding a mailbox / changing the company's domains) run once:
+
+```bash
+pnpm db:deploy
+pnpm replies:recompute all      # re-links copies, fills internalRecipients, recomputes every thread
+```
+
+### Daily / weekly / monthly summary
+
+The **Summary** page (`/c/<slug>/summary`) shows, for the mailbox chosen in the top bar or for all mailboxes, the figures of a rolling window — **Today**, **Last 7 days**, **Last 30 days** — and a "Generate summary" button. One Claude call (counted against `AI_MAX_CALLS_PER_DAY`) returns a very short digest: a one-line overview and up to five bullets each for *received*, *sent* and *needs attention*. Counts come from the database, only the words come from the model; existing thread summaries feed the prompt so it stays small (least urgent threads are dropped past ~40k tokens). Results are stored in `PeriodSummary`, so the page shows the last digest until someone regenerates it. Any member can generate; the action is audited.
+
+```bash
+pnpm ai:period sales@api-pharma.net --period week            # one mailbox
+pnpm ai:period all --org api-pharma.net --period month       # all mailboxes of a company
+```
+
 ## Commands
 
 | Command | What it does |
@@ -257,11 +285,12 @@ pnpm --filter @email-tracker/core check:migration   # replays the AppUser → Me
 | `pnpm mailbox add <email> [--org-name] [--org-domain] [--tenant] [--alias …]` | register a mailbox |
 | `pnpm mailbox list` / `pause <email>` / `resume <email>` | manage mailboxes |
 | `pnpm sync:once <email\|all> [--reset] [--days N] [--no-ai]` | backfill / incremental sync, then AI summaries for touched threads |
-| `pnpm replies:recompute <email\|all>` | re-run reply detection + thread status for every thread |
+| `pnpm replies:recompute <email\|all> [--no-dedupe]` | re-link copies across mailboxes + internal recipients, then re-run reply detection + thread status for every thread |
 | `pnpm replies:report <email> [--days 30]` | reply stats + oldest unanswered emails, for spot-checking against Outlook |
 | `pnpm ai:backfill <email\|all> [--limit N] [--dry-run]` | summarize unsummarized threads via the Batch API; dry-run prints the cost estimate |
 | `pnpm ai:summarize <email\|all> [--limit N]` | live summaries for threads with new messages |
 | `pnpm ai:summarize-thread <threadId> [--force]` | summarize one thread, print JSON |
+| `pnpm ai:period <email\|all> [--period day\|week\|month] [--org <domain>]` | very short digest of everything sent and received, stored for the Summary page |
 | `pnpm ai:usage [--days 30]` | Claude calls, tokens and cost |
 | `pnpm user add <email> [--org <domain> --role admin\|viewer] [--owner]` / `user list` / `user remove <email> [--org <domain>]` | dashboard users and memberships |
 | `pnpm org:seed` / `org:seed-pioneer` / `org:seed-api-pharma` | known company records |

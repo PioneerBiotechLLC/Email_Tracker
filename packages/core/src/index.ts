@@ -13,7 +13,8 @@ export { normalizeSubject, isAutoReplySubject } from "./mail/subject.js";
 export { extractReplyHeaders, headerMap, parseMessageIds, normalizeMessageId } from "./mail/headers.js";
 export { cleanBody, htmlToText, stripQuotedHistory, stripSignature, tidyWhitespace } from "./mail/text.js";
 export { syncMailbox, syncMailboxLocked, acquireSyncLock, releaseSyncLock, type SyncOptions, type SyncStats } from "./sync/sync-mailbox.js";
-export { recomputeThread, recomputeMailboxThreads, businessHoursFor, slaHoursFor, ownerAddresses } from "./sync/threads.js";
+export { recomputeThread, recomputeMailboxThreads, recomputeSiblingThreads, businessHoursFor, slaHoursFor, ownerAddresses, type RecomputeResult } from "./sync/threads.js";
+export { orgDomains, domainOf, internalRecipients, copyRank, pickPrimary, assignPrimaries, dedupeMessageIds, dedupeOrgMessages, threadRefKey, type MessageCopy, type ThreadRef, type DedupeOrgResult } from "./sync/dedupe.js";
 export {
   detectReplies, computeThreadStatus, effectiveTime, isFromUs, isRealInbound, isRealOutbound, REPLY_VERBS, FORWARD_VERB,
   type ReplyInputMessage, type ReplyResult, type DetectOptions, type ThreadState, type StatusOptions, type StatusResult,
@@ -24,10 +25,16 @@ export { PRICES, BATCH_DISCOUNT, priceFor, estimateCostUsd, estimateTokens, type
 export { ThreadSummarySchema, SUMMARY_TOOL, SUMMARY_TOOL_NAME, CATEGORIES, PRIORITIES, LANGUAGES, type ThreadSummary } from "./ai/schema.js";
 export { systemPrompt, userMessage, buildThreadInput, formatMessageLine, formatLocalDate, DEFAULT_INPUT_TOKEN_BUDGET, type InputMessage, type BuiltInput } from "./ai/prompts.js";
 export {
-  summarizeThread, summarizeThreads, prepareThread, applySummaryToThread, decideSkip, applyNeedsReplyDecision, shouldCloseAsConcluded,
+  summarizeThread, summarizeThreads, prepareThread, applySummaryToThread, propagateSummaryToDuplicates, decideSkip, applyNeedsReplyDecision, shouldCloseAsConcluded,
   chooseModel, parseSummaryResponse, callSummary, summarizeWithRetry, buildMessageParams, countCallsToday, recordUsage, startOfLocalDay,
   type SummarizeResult, type SummarizeManyResult, type SummaryClient, type SummaryRequest, type PreparedThread, type SkipReason,
 } from "./ai/summarize-thread.js";
+export {
+  SUMMARY_PERIODS, PERIOD_LABEL, isSummaryPeriod, periodRange, collectPeriodActivity, buildActivity, buildPeriodInput, orderForDigest, formatThreadLine,
+  periodSystemPrompt, periodUserMessage, parsePeriodResponse, callPeriodSummary, summarizePeriod, latestPeriodSummary, scopeKeyFor,
+  PERIOD_SUMMARY_TOOL, PERIOD_SUMMARY_TOOL_NAME, PeriodSummarySchema, DEFAULT_PERIOD_TOKEN_BUDGET,
+  type SummaryPeriodKey, type PeriodRange, type PeriodThread, type PeriodStats, type PeriodActivity, type PeriodSummaryOutput, type PeriodSummaryRecord, type SummarizePeriodResult, type SummarizePeriodOptions,
+} from "./ai/period-summary.js";
 export { planBackfill, runBackfill, EST_OUTPUT_TOKENS, type BackfillPlan, type RunResult } from "./ai/backfill.js";
 export { usageReport, type UsageReport, type UsageRow } from "./ai/usage.js";
 export { can, assertCan, assertSameOrg, mailboxScope, ForbiddenError, type Role, type Action, type SessionContext } from "./auth/permissions.js";

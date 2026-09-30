@@ -55,6 +55,7 @@ const messageSelect = {
   replyMethod: true,
   responseMinutes: true,
   responseBusinessMinutes: true,
+  duplicateOfId: true,
 } satisfies Prisma.MessageSelect;
 
 type DbMessage = Prisma.MessageGetPayload<{ select: typeof messageSelect }>;
@@ -91,6 +92,50 @@ export interface RecomputeResult {
   threadId: string;
   status: string;
   messagesUpdated: number;
+  /** id of the primary thread when this one is a copy (every message is a copy of that thread's messages) */
+  duplicateOfId: string | null;
+}
+
+/**
+ * Sent messages of the company's OTHER mailboxes that belong to this conversation
+ * (same conversation id, or headers pointing at one of its Message-IDs). A reply
+ * by a colleague to an email we were Cc'd on counts as the reply for us as well.
+ */
+async function siblingOutbound(db: PrismaClient, orgId: string, mailboxId: string, conversationId: string, messageIds: string[]): Promise<DbMessage[]> {
+  return db.message.findMany({
+    where: {
+      mailbox: { orgId },
+      mailboxId: { not: mailboxId },
+      direction: "outbound",
+      isAutoReply: false,
+      duplicateOfId: null,
+      OR: [{ conversationId }, ...(messageIds.length ? [{ inReplyTo: { in: messageIds } }, { references: { hasSome: messageIds } }] : [])],
+    },
+    select: messageSelect,
+  });
+}
+
+interface PrimaryInfo {
+  id: string;
+  threadId: string;
+  direction: "inbound" | "outbound";
+}
+
+/** The primary rows of this thread's copies (see sync/dedupe.ts), keyed by id. */
+async function loadPrimaries(db: PrismaClient, messages: Pick<DbMessage, "duplicateOfId">[]): Promise<Map<string, PrimaryInfo>> {
+  const ids = messages.map((m) => m.duplicateOfId).filter((id): id is string => !!id);
+  if (!ids.length) return new Map();
+  const rows = await db.message.findMany({ where: { id: { in: ids } }, select: { id: true, threadId: true, direction: true } });
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
+/** The single thread whose messages every message of this thread is a copy of, or null. */
+function duplicateThreadOf(threadId: string, messages: Pick<DbMessage, "duplicateOfId">[], primaries: Map<string, PrimaryInfo>): string | null {
+  if (!messages.length || !messages.every((m) => m.duplicateOfId)) return null;
+  const threadIds = new Set(messages.map((m) => primaries.get(m.duplicateOfId!)?.threadId ?? "?"));
+  if (threadIds.size !== 1) return null;
+  const [target] = threadIds;
+  return target && target !== "?" && target !== threadId ? target : null;
 }
 
 /**
@@ -139,9 +184,18 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
     }
   }
 
-  // Reply detection + status (pure)
-  const inputs = messages.map(toReplyInput);
-  const replies = detectReplies(inputs, { owners, businessHours });
+  // Reply detection + status (pure). Sent mail of the company's other mailboxes also counts as a reply, and a
+  // copy of a colleague's outgoing email (their reply-all that landed here because we were Cc'd) is the
+  // company's own mail: nobody is waiting on this mailbox because of it.
+  const primaries = await loadPrimaries(db, messages);
+  const inputs = messages.map((m) => {
+    const r = toReplyInput(m);
+    if (r.direction === "inbound" && m.duplicateOfId && primaries.get(m.duplicateOfId)?.direction === "outbound") r.direction = "outbound";
+    return r;
+  });
+  const siblings = await siblingOutbound(db, thread.mailbox.orgId, mailboxId, conversationId, messages.map((m) => m.internetMessageId).filter((id): id is string => !!id));
+  const replies = detectReplies(inputs, { owners, businessHours, extraOutbound: siblings.map(toReplyInput) });
+  const duplicateOfId = duplicateThreadOf(thread.id, messages, primaries);
   const status = computeThreadStatus(
     inputs,
     replies,
@@ -181,6 +235,7 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
         status: status.status,
         awaitingSince: status.awaitingSince,
         overdueAt: status.overdueAt,
+        duplicateOfId,
         // A reopened thread is no longer closed.
         ...(thread.status === "closed" && status.status !== "closed" ? { closedAt: null, closedBy: null } : {}),
         // A newer inbound message invalidates the previous needsReply decision (user or AI) until the AI re-summarizes.
@@ -189,7 +244,28 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
     }),
   );
   await db.$transaction(updates);
-  return { threadId: thread.id, status: status.status, messagesUpdated: updates.length - 1 };
+  return { threadId: thread.id, status: status.status, messagesUpdated: updates.length - 1, duplicateOfId };
+}
+
+/**
+ * Recomputes the threads of the company's OTHER mailboxes that share one of the
+ * given conversation ids (their reply status may depend on mail that just
+ * arrived here). Returns how many were recomputed.
+ */
+export async function recomputeSiblingThreads(db: PrismaClient, orgId: string, mailboxId: string, conversationIds: string[], skip?: Set<string>): Promise<number> {
+  let n = 0;
+  for (let i = 0; i < conversationIds.length; i += 500) {
+    const rows = await db.thread.findMany({
+      where: { mailbox: { orgId }, mailboxId: { not: mailboxId }, conversationId: { in: conversationIds.slice(i, i + 500) } },
+      select: { mailboxId: true, conversationId: true },
+    });
+    for (const r of rows) {
+      if (skip?.has(`${r.mailboxId}\u0000${r.conversationId}`)) continue;
+      await recomputeThread(db, r.mailboxId, r.conversationId);
+      n += 1;
+    }
+  }
+  return n;
 }
 
 /** Recomputes every thread of a mailbox. Returns counts per resulting status. */

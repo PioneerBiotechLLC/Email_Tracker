@@ -29,7 +29,8 @@ export async function planBackfill(opts: PlanOptions = {}): Promise<BackfillPlan
   const db = getDb();
   const env = getEnv();
   const now = opts.now ?? new Date();
-  const where: Prisma.ThreadWhereInput = opts.mailboxIds ? { mailboxId: { in: opts.mailboxIds } } : { mailbox: { isActive: true } };
+  // Copies of threads tracked in another mailbox are not summarized; they inherit the primary thread's summary.
+  const where: Prisma.ThreadWhereInput = { ...(opts.mailboxIds ? { mailboxId: { in: opts.mailboxIds } } : { mailbox: { isActive: true } }), duplicateOfId: null };
   const rows = await db.thread.findMany({ where, include: { mailbox: { include: { org: true } } }, orderBy: { lastMessageAt: "desc" } });
   const pending = rows.filter((t) => t.messageCount > t.summaryMessageCount && t.messageCount > 0);
 

@@ -16,8 +16,12 @@ describe("permissions", () => {
     expect(() => assertSameOrg(ctx, { orgId: "org-b" })).toThrow(ForbiddenError);
     expect(() => assertSameOrg(ctx, null)).toThrow(ForbiddenError);
   });
-  it("scopes queries to the org unless a mailbox is chosen", () => {
-    expect(mailboxScope({ orgId: "org-a" })).toEqual({ mailbox: { orgId: "org-a" } });
+  it("scopes queries to the org (primary copies only) unless a mailbox is chosen", () => {
+    expect(mailboxScope({ orgId: "org-a" })).toEqual({ mailbox: { orgId: "org-a" }, duplicateOfId: null });
     expect(mailboxScope({ orgId: "org-a" }, "mb-1")).toEqual({ mailboxId: "mb-1" });
+  });
+  it("any member may generate a period summary", () => {
+    expect(can("viewer", "summary.generate")).toBe(true);
+    expect(can("admin", "summary.generate")).toBe(true);
   });
 });

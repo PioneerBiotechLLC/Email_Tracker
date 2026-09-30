@@ -4,7 +4,7 @@
  *   pnpm db:seed-demo            create / refresh
  *   pnpm db:seed-demo --remove   delete the demo org and everything under it
  */
-import { getDb, disconnectDb, protectBody, recomputeThread, normalizeSubject } from "../src/index.js";
+import { getDb, disconnectDb, protectBody, recomputeThread, recomputeMailboxThreads, dedupeOrgMessages, normalizeSubject } from "../src/index.js";
 
 const DOMAIN = "demo-pharma.example";
 const MAILBOXES = ["sales@demo-pharma.example", "regulatory@demo-pharma.example"];
@@ -38,6 +38,8 @@ interface Scenario {
   gapHours?: number;
   forceStatus?: "closed" | "no_reply_needed";
   autoReplyLast?: boolean;
+  /** the other demo mailbox was Cc'd: it holds copies of every message (same Message-ID) */
+  ccOtherMailbox?: boolean;
 }
 
 const customers = [
@@ -59,7 +61,7 @@ const scenarios: Scenario[] = [
     messages: ["Dear Sales,\n\nPlease quote for 200,000 packs of Paracetamol 500mg (10x10 blisters), delivery to Abu Dhabi within 6 weeks. Include COA and shelf life.\n\nRegards,\nProcurement"],
     summary: "Al Noor Hospital asks for a quotation for 200,000 packs of Paracetamol 500mg, delivery to Abu Dhabi within 6 weeks, with COA and shelf life. No reply sent yet.",
     keyPoints: ["200,000 packs Paracetamol 500mg (10x10)", "Delivery Abu Dhabi within 6 weeks", "COA and shelf life required"], asks: [{ from: "Al Noor Procurement", ask: "Send quotation with COA and shelf life", due: null }], nextAction: "Send the quotation with COA and shelf-life details", needsReply: true },
-  { subject: "PO 4512 – Amoxicillin 250mg suspension", category: "customer", priority: "normal", from: customers[1]!, lang: "en", lastHoursAgo: 5, gapHours: 20,
+  { subject: "PO 4512 – Amoxicillin 250mg suspension", category: "customer", priority: "normal", from: customers[1]!, lang: "en", lastHoursAgo: 5, gapHours: 20, ccOtherMailbox: true,
     messages: ["Please find attached PO 4512 for 5,000 bottles Amoxicillin 250mg/5ml suspension. Confirm delivery date.", "OUT:Thank you. PO 4512 confirmed; dispatch expected 12 Oct, delivery to Riyadh by 18 Oct. Invoice INV-2210 attached.", "Received, thanks. Please share the tracking number once shipped."],
     summary: "MedCare sent PO 4512 for 5,000 bottles of Amoxicillin 250mg/5ml. We confirmed dispatch on 12 Oct and delivery by 18 Oct (INV-2210). They now ask for the tracking number once shipped.",
     keyPoints: ["PO 4512: 5,000 bottles Amoxicillin 250mg/5ml", "Dispatch 12 Oct, delivery Riyadh 18 Oct", "INV-2210 issued"], asks: [{ from: "MedCare", ask: "Tracking number once shipped", due: "after dispatch" }], nextAction: "Send the tracking number after dispatch on 12 Oct", needsReply: true },
@@ -71,7 +73,7 @@ const scenarios: Scenario[] = [
     messages: ["OUT:Dear Hetero team, please send the COA for batch PCM-2309 before the shipment leaves Mumbai.", "Please find the COA for batch PCM-2309 attached. Assay 99.6%, dissolution compliant, expiry 08/2028.", "OUT:Received with thanks. Cleared for shipment."],
     summary: "We asked Hetero for the COA of batch PCM-2309; they sent it (assay 99.6%, expiry 08/2028) and we confirmed the batch is cleared for shipment. Nothing pending.",
     keyPoints: ["Batch PCM-2309 COA received", "Assay 99.6%, expiry 08/2028", "Cleared for shipment"], asks: [], nextAction: null, needsReply: false },
-  { subject: "Shipment AWB 1234-5678 delayed at Jebel Ali", category: "supplier", priority: "urgent", from: suppliers[3]!, lang: "en", lastHoursAgo: 50,
+  { subject: "Shipment AWB 1234-5678 delayed at Jebel Ali", category: "supplier", priority: "urgent", from: suppliers[3]!, lang: "en", lastHoursAgo: 50, ccOtherMailbox: true,
     messages: ["Shipment AWB 1234-5678 (12 pallets, temperature-controlled) is held at Jebel Ali customs pending the import permit copy. Please send it today to avoid demurrage of AED 1,200/day."],
     summary: "DHL reports that shipment AWB 1234-5678 (12 temperature-controlled pallets) is held at Jebel Ali customs pending the import permit. Demurrage of AED 1,200/day applies until we send the permit copy.",
     keyPoints: ["AWB 1234-5678, 12 pallets, cold chain", "Held at Jebel Ali customs", "Demurrage AED 1,200/day"], asks: [{ from: "DHL Healthcare", ask: "Send the import permit copy", due: "today" }], nextAction: "Send the import permit copy to DHL immediately", needsReply: true },
@@ -187,6 +189,8 @@ async function seed() {
     const gap = sc.gapHours ?? 24;
     const count = sc.messages.length;
     const thread = await db.thread.create({ data: { mailboxId: mb.id, conversationId, subject: sc.subject, normalizedSubject: normalizeSubject(sc.subject), firstMessageAt: new Date(), lastMessageAt: new Date() } });
+    const other = mb === mbs[0] ? mbs[1]! : mbs[0]!;
+    const cc = sc.ccOtherMailbox ? [{ address: other.emailAddress, name: other.displayName }] : [];
     let prevInboundId: string | null = null;
     let prevInboundMsgId: string | null = null;
     for (let k = 0; k < count; k++) {
@@ -204,6 +208,7 @@ async function seed() {
           direction: ours ? "outbound" : "inbound", folder: ours ? "sent" : "inbox",
           fromAddress: ours ? mb.emailAddress : sc.from.address, fromName: ours ? mb.displayName : sc.from.name,
           toAddresses: ours ? [{ address: sc.from.address, name: sc.from.name }] : [{ address: mb.emailAddress, name: mb.displayName }],
+          ccAddresses: cc,
           subject: k === 0 ? sc.subject : `RE: ${sc.subject}`, receivedAt: at, sentAt: at, bodyPreview: text.slice(0, 120),
           bodyText: stored.bodyText, bodyEncrypted: stored.bodyEncrypted, isAutoReply: isAuto,
           // some inbound messages carry the Outlook reply verb instead of a matched sent copy
@@ -211,6 +216,20 @@ async function seed() {
         },
       });
       if (!ours) { prevInboundId = m.id; prevInboundMsgId = internetMessageId; }
+      if (sc.ccOtherMailbox) {
+        // The Cc'd mailbox holds the same emails under its own Graph ids (always in its Inbox, so our replies arrive as inbound there).
+        const copyThread = await db.thread.upsert({ where: { mailboxId_conversationId: { mailboxId: other.id, conversationId } }, create: { mailboxId: other.id, conversationId, subject: sc.subject, normalizedSubject: normalizeSubject(sc.subject), firstMessageAt: at, lastMessageAt: at }, update: {} });
+        await db.message.create({
+          data: {
+            mailboxId: other.id, threadId: copyThread.id, conversationId, graphMessageId: `${conversationId}-${k}-cc`, internetMessageId,
+            inReplyTo: ours && prevInboundMsgId ? prevInboundMsgId : null, references: [], direction: "inbound", folder: "inbox",
+            fromAddress: ours ? mb.emailAddress : sc.from.address, fromName: ours ? mb.displayName : sc.from.name,
+            toAddresses: ours ? [{ address: sc.from.address, name: sc.from.name }] : [{ address: mb.emailAddress, name: mb.displayName }], ccAddresses: cc,
+            subject: k === 0 ? sc.subject : `RE: ${sc.subject}`, receivedAt: new Date(at.getTime() + 1000), sentAt: at, bodyPreview: text.slice(0, 120),
+            bodyText: stored.bodyText, bodyEncrypted: stored.bodyEncrypted,
+          },
+        });
+      }
     }
     void prevInboundId;
     await recomputeThread(db, mb.id, conversationId);
@@ -224,13 +243,16 @@ async function seed() {
     if (sc.forceStatus === "closed") await db.thread.update({ where: { id: thread.id }, data: { status: "closed", closedAt: hoursAgo(sc.lastHoursAgo - 1), closedBy: sc.needsReply === false ? "ai" : ADMIN, awaitingSince: null, overdueAt: null } });
     if (sc.forceStatus === "no_reply_needed") await db.thread.update({ where: { id: thread.id }, data: { status: "no_reply_needed", needsReply: false, needsReplyDecidedBy: "ai", needsReplyDecidedAt: hoursAgo(sc.lastHoursAgo - 0.1), awaitingSince: null, overdueAt: null } });
   }
+  // Link the Cc'd copies to their primaries, compute in-company recipients, and settle every thread.
+  const dedupe = await dedupeOrgMessages(db, org.id);
+  for (const mb of mbs) await recomputeMailboxThreads(db, mb.id);
   // A little AI usage history for the settings page
   const usage = [];
   for (let d = 0; d < 14; d++) for (let c = 0; c < 3 + Math.floor(rnd() * 6); c++) usage.push({ orgId: org.id, model: rnd() > 0.3 ? "claude-sonnet-5-5" : "claude-haiku-4-5", inputTokens: 900 + Math.floor(rnd() * 2000), outputTokens: 250 + Math.floor(rnd() * 300), cacheReadTokens: 900, cacheWriteTokens: 0, costUsd: 0.004 + rnd() * 0.006, batch: rnd() > 0.5, createdAt: hoursAgo(d * 24 + rnd() * 20) });
   await db.aiUsage.createMany({ data: usage });
 
   const counts = await db.thread.groupBy({ by: ["status"], where: { mailbox: { orgId: org.id } }, _count: true });
-  console.log(`Seeded demo organization "${org.name}" (${DOMAIN}) with ${scenarios.length} threads:`);
+  console.log(`Seeded demo organization "${org.name}" (${DOMAIN}) with ${scenarios.length} threads (${dedupe.duplicates} emails are copies held by the Cc'd mailbox):`);
   for (const c of counts) console.log(`  ${c.status.padEnd(16)} ${c._count}`);
   console.log(`Dashboard users: ${ADMIN} (admin), ${VIEWER} (viewer). Remove everything with: pnpm db:seed-demo --remove`);
 }

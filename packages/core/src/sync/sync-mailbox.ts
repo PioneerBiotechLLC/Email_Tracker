@@ -7,7 +7,8 @@ import { extractReplyHeaders, normalizeMessageId } from "../mail/headers.js";
 import type { MailProvider, RawMessage, SyncFolder } from "../mail/provider.js";
 import { normalizeSubject } from "../mail/subject.js";
 import { cleanBody } from "../mail/text.js";
-import { ownerAddresses, recomputeThread } from "./threads.js";
+import { dedupeMessageIds, internalRecipients, orgDomains, threadRefKey, type ThreadRef } from "./dedupe.js";
+import { ownerAddresses, recomputeSiblingThreads, recomputeThread } from "./threads.js";
 
 const log = createLogger("sync");
 
@@ -25,6 +26,10 @@ export interface SyncStats {
   mailbox: string;
   folders: Record<SyncFolder, { pages: number; upserted: number; skippedDrafts: number; removed: number }>;
   threadsRecomputed: number;
+  /** threads of the company's other mailboxes recomputed because they share a conversation or a copied email */
+  siblingThreadsRecomputed: number;
+  /** messages of this run that turned out to be copies of mail already tracked in another mailbox */
+  duplicates: number;
   /** conversation ids that received new/updated messages (for AI summarization) */
   touchedConversationIds: string[];
   /** true when the deadline stopped the sync before both folders were complete */
@@ -34,8 +39,16 @@ export interface SyncStats {
 
 const FOLDERS: SyncFolder[] = ["inbox", "sentitems"];
 
-/** Upserts one Graph message (and its thread shell). Returns the conversation id touched. */
-async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFolder, raw: RawMessage, owners: Set<string>, previewOnly = false): Promise<string> {
+interface UpsertContext {
+  owners: Set<string>;
+  /** the company's email domains, for internal-recipient detection */
+  domains: Set<string>;
+  previewOnly: boolean;
+}
+
+/** Upserts one Graph message (and its thread shell). Returns the conversation id and Message-ID touched. */
+async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFolder, raw: RawMessage, ctx: UpsertContext): Promise<{ conversationId: string; internetMessageId: string | null }> {
+  const { owners, previewOnly } = ctx;
   const conversationId = raw.conversationId ?? `noconv:${raw.id}`;
   const fromAddress = raw.from?.address ?? "";
   const direction: "inbound" | "outbound" =
@@ -61,11 +74,12 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
     select: { id: true },
   });
 
+  const internetMessageId = normalizeMessageId(raw.internetMessageId);
   const data = {
     mailboxId: mailbox.id,
     threadId: thread.id,
     conversationId,
-    internetMessageId: normalizeMessageId(raw.internetMessageId),
+    internetMessageId,
     inReplyTo,
     references,
     direction,
@@ -85,6 +99,8 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
     isAutoReply,
     lastVerb: raw.lastVerb,
     lastVerbAt: raw.lastVerbAt,
+    // Colleagues (addresses in the company's domains) who also got this email
+    internalRecipients: internalRecipients({ to: raw.to, cc: raw.cc }, ctx.domains, owners),
   };
 
   await db.message.upsert({
@@ -92,7 +108,7 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
     create: { graphMessageId: raw.id, ...data },
     update: data,
   });
-  return conversationId;
+  return { conversationId, internetMessageId };
 }
 
 /**
@@ -120,6 +136,8 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
   const owners = ownerAddresses(mailbox);
   const sinceDays = opts.backfillDays ?? getEnv().BACKFILL_DAYS;
   const touched = new Set<string>();
+  // Threads in the company's OTHER mailboxes whose messages were (un)linked as copies during this run
+  const siblingTouched = new Map<string, ThreadRef>();
 
   const stats: SyncStats = {
     mailbox: mailbox.emailAddress,
@@ -128,11 +146,13 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
       sentitems: { pages: 0, upserted: 0, skippedDrafts: 0, removed: 0 },
     },
     threadsRecomputed: 0,
+    siblingThreadsRecomputed: 0,
+    duplicates: 0,
     touchedConversationIds: [],
     partial: false,
     durationMs: 0,
   };
-  const previewOnly = mailbox.org.bodyStorage === "preview_only";
+  const ctx: UpsertContext = { owners, domains: orgDomains(mailbox.org), previewOnly: mailbox.org.bodyStorage === "preview_only" };
 
   for (const folder of FOLDERS) {
     if (stats.partial) break;
@@ -160,13 +180,23 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
       const page = step.value;
       fstats.pages += 1;
       fstats.removed += page.removedIds.length;
+      const messageIds: string[] = [];
       for (const raw of page.messages) {
         if (raw.isDraft) {
           fstats.skippedDrafts += 1;
           continue;
         }
-        touched.add(await upsertMessage(db, mailbox, folder, raw, owners, previewOnly));
+        const r = await upsertMessage(db, mailbox, folder, raw, ctx);
+        touched.add(r.conversationId);
+        if (r.internetMessageId) messageIds.push(r.internetMessageId);
         fstats.upserted += 1;
+      }
+      // The same email may already be tracked in another mailbox of the company (we were Cc'd): link the copies.
+      const dedupe = await dedupeMessageIds(db, mailbox.orgId, messageIds);
+      stats.duplicates += dedupe.duplicates;
+      for (const ref of dedupe.changed) {
+        if (ref.mailboxId === mailbox.id) touched.add(ref.conversationId);
+        else siblingTouched.set(threadRefKey(ref), ref);
       }
       log.debug(`page done`, { folder, page: fstats.pages, messages: page.messages.length });
       if (opts.deadlineAt && Date.now() >= opts.deadlineAt.getTime()) {
@@ -184,11 +214,18 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
     await recomputeThread(db, mailbox.id, conversationId);
     stats.threadsRecomputed += 1;
   }
+  // Other mailboxes of the company: threads that share a conversation with new mail here (a reply sent from
+  // this mailbox answers their copy too) and threads whose messages were re-linked as copies.
+  for (const ref of siblingTouched.values()) {
+    await recomputeThread(db, ref.mailboxId, ref.conversationId);
+    stats.siblingThreadsRecomputed += 1;
+  }
+  stats.siblingThreadsRecomputed += await recomputeSiblingThreads(db, mailbox.orgId, mailbox.id, Array.from(touched), new Set(siblingTouched.keys()));
 
   stats.touchedConversationIds = Array.from(touched);
   await db.mailbox.update({ where: { id: mailbox.id }, data: { lastSyncedAt: new Date() } });
   stats.durationMs = Date.now() - started;
-  log.info("sync complete", { mailbox: mailbox.emailAddress, threads: stats.threadsRecomputed, ms: stats.durationMs });
+  log.info("sync complete", { mailbox: mailbox.emailAddress, threads: stats.threadsRecomputed, siblingThreads: stats.siblingThreadsRecomputed, duplicates: stats.duplicates, ms: stats.durationMs });
   return stats;
 }
 

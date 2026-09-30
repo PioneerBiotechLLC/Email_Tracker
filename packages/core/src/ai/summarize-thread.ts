@@ -16,7 +16,7 @@ const log = createLogger("ai");
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested without a DB or the API)
 
-export type SkipReason = "nothing_new" | "debounce" | "cap_reached";
+export type SkipReason = "nothing_new" | "debounce" | "cap_reached" | "duplicate" | "duplicate_copied";
 
 export interface SkipInput {
   messageCount: number;
@@ -254,7 +254,46 @@ export async function applySummaryToThread(db: PrismaClient, threadId: string, s
     await db.thread.update({ where: { id: threadId }, data: { status: "closed", closedAt: now, closedBy: "ai", awaitingSince: null, overdueAt: null } });
     status = "closed";
   }
+  await propagateSummaryToDuplicates(db, threadId, now);
   return { status };
+}
+
+/**
+ * Copies a thread's summary to the threads that are copies of it (the same emails
+ * tracked in another mailbox of the company because it was Cc'd). No API call.
+ * Returns the number of threads updated.
+ */
+export async function propagateSummaryToDuplicates(db: PrismaClient, primaryThreadId: string, now = new Date(), onlyThreadId?: string): Promise<number> {
+  const src = await db.thread.findUnique({
+    where: { id: primaryThreadId },
+    select: { summary: true, keyPoints: true, asks: true, nextAction: true, category: true, priority: true, summaryLang: true, summaryModel: true, needsReply: true },
+  });
+  if (!src?.summary) return 0;
+  const copies = await db.thread.findMany({
+    where: { duplicateOfId: primaryThreadId, ...(onlyThreadId ? { id: onlyThreadId } : {}) },
+    select: { id: true, mailboxId: true, conversationId: true, messageCount: true, categoryManual: true, priorityManual: true, needsReplyDecidedBy: true },
+  });
+  for (const c of copies) {
+    await db.thread.update({
+      where: { id: c.id },
+      data: {
+        summary: src.summary,
+        keyPoints: (src.keyPoints ?? []) as Prisma.InputJsonValue,
+        asks: (src.asks ?? []) as Prisma.InputJsonValue,
+        nextAction: src.nextAction,
+        ...(c.categoryManual ? {} : { category: src.category }),
+        ...(c.priorityManual ? {} : { priority: src.priority }),
+        summaryLang: src.summaryLang,
+        summaryUpdatedAt: now,
+        summaryMessageCount: c.messageCount,
+        summaryModel: src.summaryModel,
+        summaryError: null,
+        ...(c.needsReplyDecidedBy === "user" ? {} : { needsReply: src.needsReply, needsReplyDecidedBy: "ai" as const, needsReplyDecidedAt: now }),
+      },
+    });
+    await recomputeThread(db, c.mailboxId, c.conversationId);
+  }
+  return copies.length;
 }
 
 export interface SummarizeOptions {
@@ -281,6 +320,12 @@ export async function summarizeThread(threadId: string, opts: SummarizeOptions =
   const thread = await db.thread.findUnique({ where: { id: threadId }, include: threadInclude });
   if (!thread) return { threadId, outcome: "error", reason: "not_found" };
   const org = thread.mailbox.org;
+
+  // A copy of a thread tracked in another mailbox: reuse that thread's summary instead of paying for it twice.
+  if (thread.duplicateOfId) {
+    const copied = await propagateSummaryToDuplicates(db, thread.duplicateOfId, now, thread.id);
+    return { threadId, outcome: "skipped", reason: copied ? "duplicate_copied" : "duplicate" };
+  }
 
   const callsToday = await countCallsToday(db, org.id, org.timezone, now);
   const skip = decideSkip({

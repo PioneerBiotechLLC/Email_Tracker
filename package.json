@@ -19,6 +19,7 @@
     "ai:summarize": "pnpm --filter @email-tracker/worker ai summarize",
     "ai:summarize-thread": "pnpm --filter @email-tracker/worker ai summarize-thread",
     "ai:usage": "pnpm --filter @email-tracker/worker ai usage",
+    "ai:period": "pnpm --filter @email-tracker/worker ai period",
     "dev": "pnpm --filter @email-tracker/web dev",
     "build": "pnpm --filter @email-tracker/web build",
     "start": "pnpm --filter @email-tracker/web start",

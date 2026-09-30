@@ -26,6 +26,9 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
   const isAdmin = ctx.role === "admin";
   const asks = Array.isArray(thread.asks) ? (thread.asks as { from: string; ask: string; due: string | null }[]) : [];
   const keyPoints = Array.isArray(thread.keyPoints) ? (thread.keyPoints as string[]) : [];
+  // Other mailboxes of the company that hold copies of these emails (we were Cc'd, or they were)
+  const alsoIn = new Map<string, string>();
+  for (const m of messages) for (const d of m.duplicates) if (!alsoIn.has(d.mailbox.emailAddress)) alsoIn.set(d.mailbox.emailAddress, d.threadId);
 
   return (
     <div className="space-y-4">
@@ -39,6 +42,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
             <StatusBadge status={thread.status} overdueAt={thread.overdueAt} now={now} />
             <CategoryChip category={thread.category} /><PriorityChip priority={thread.priority} />
             <span>{thread.mailbox.emailAddress} · {messages.length} messages</span>
+            {!thread.duplicateOf && alsoIn.size > 0 && <span>· also received by {[...alsoIn.entries()].map(([addr, tid], i) => <span key={addr}>{i > 0 && ", "}<Link href={`${base}/threads/${tid}`} className="underline">{addr}</Link></span>)}</span>}
             {thread.status === "awaiting_us" && thread.awaitingSince && <span>· waiting {formatSince(thread.awaitingSince, now)}</span>}
             {thread.status === "closed" && <span>· closed by {thread.closedBy === "ai" ? "the AI (concluded)" : thread.closedBy}</span>}
           </div>
@@ -55,6 +59,12 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
           </div>
         )}
       </div>
+      {thread.duplicateOf && (
+        <div className="rounded-md border px-3 py-2 text-sm status-muted" role="note" data-testid="duplicate-notice">
+          Copy: these emails were also received by <strong>{thread.duplicateOf.mailbox.emailAddress}</strong>, where the thread is tracked and summarized. It is hidden from the &quot;All mailboxes&quot; views so nothing is counted twice.{" "}
+          <Link href={`${base}/threads/${thread.duplicateOf.id}`} className="underline">Open the primary thread</Link>.
+        </div>
+      )}
       {sp.ai && (
         <div className={cn("rounded-md border px-3 py-2 text-sm", sp.ai === "summarized" ? "status-replied" : "status-waiting")} role="status">
           {sp.ai === "summarized" ? `Summary updated (${sp.detail}).` : `Summary not updated: ${sp.ai}${sp.detail ? ` — ${sp.detail}` : ""}.`}
@@ -73,13 +83,17 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
                   <span>· {formatDateTime(m.direction === "outbound" && m.sentAt ? m.sentAt : m.receivedAt, tz, now)}</span>
                   {m.isAutoReply && <span className="rounded bg-muted px-1">automatic reply</span>}
                   {m.hasAttachments && <span>· 📎</span>}
+                  {m.duplicateOf && <span className="rounded bg-muted px-1" title={`The same email is tracked in ${m.duplicateOf.mailbox.emailAddress}`}>copy of {m.duplicateOf.mailbox.emailAddress}</span>}
                 </header>
+                {m.internalRecipients.length > 0 && <p className="mb-1 text-xs text-muted-foreground">Also to (in-company): {m.internalRecipients.join(", ")}</p>}
                 <div className="whitespace-pre-wrap break-words" dir="auto">{m.body || <span className="italic text-muted-foreground">(empty)</span>}</div>
                 {!ours && !m.isAutoReply && (
                   <footer className="mt-2 border-t pt-1.5 text-xs text-muted-foreground">
                     {m.repliedAt ? (
                       <>Replied {formatDateTime(m.repliedAt, tz, now)} via {METHOD[m.replyMethod ?? ""] ?? "?"} · {formatMinutes(m.responseBusinessMinutes)} business ({formatMinutes(m.responseMinutes)} raw)
-                        {m.repliedBy && <> · <a href={`#msg-${m.repliedBy.id}`} className="underline">see reply</a></>}</>
+                        {m.repliedBy && (m.repliedBy.mailbox.emailAddress === thread.mailbox.emailAddress
+                          ? <> · <a href={`#msg-${m.repliedBy.id}`} className="underline">see reply</a></>
+                          : <> · answered from <strong>{m.repliedBy.mailbox.emailAddress}</strong></>)}</>
                     ) : thread.status === "awaiting_us" ? <span className="text-status-warn">Not replied yet</span> : <span>No reply recorded</span>}
                     {m.lastVerb === 104 && <span> · forwarded</span>}
                   </footer>

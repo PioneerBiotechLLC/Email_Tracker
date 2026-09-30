@@ -19,7 +19,9 @@ export type Action =
   | "thread.classify"
   | "settings.edit"
   | "users.manage"
-  | "mailbox.toggle";
+  | "mailbox.toggle"
+  /** Generate a daily/weekly/monthly AI digest (any member; costs one AI call) */
+  | "summary.generate";
 
 const ADMIN_ONLY: ReadonlySet<Action> = new Set<Action>([
   "thread.close", "thread.reopen", "thread.needsReply", "thread.resummarize", "thread.classify", "settings.edit", "users.manage", "mailbox.toggle",
@@ -47,7 +49,11 @@ export function assertSameOrg(ctx: Pick<SessionContext, "orgId">, resource: { or
   if (!resource || resource.orgId !== ctx.orgId) throw new ForbiddenError("Not found in your organization");
 }
 
-/** Prisma `where` fragment that scopes mailbox-owned rows (threads, messages) to the org, optionally to one mailbox. */
-export function mailboxScope(ctx: Pick<SessionContext, "orgId">, mailboxId?: string | null): { mailboxId: string } | { mailbox: { orgId: string } } {
-  return mailboxId ? { mailboxId } : { mailbox: { orgId: ctx.orgId } };
+/**
+ * Prisma `where` fragment that scopes mailbox-owned rows (threads, messages) to the org, optionally to one mailbox.
+ * Across all mailboxes an email that several mailboxes received (we were Cc'd) is counted once: only primary
+ * copies (`duplicateOfId = null`) are included. A single mailbox shows everything that landed in it.
+ */
+export function mailboxScope(ctx: Pick<SessionContext, "orgId">, mailboxId?: string | null): { mailboxId: string } | { mailbox: { orgId: string }; duplicateOfId: null } {
+  return mailboxId ? { mailboxId } : { mailbox: { orgId: ctx.orgId }, duplicateOfId: null };
 }

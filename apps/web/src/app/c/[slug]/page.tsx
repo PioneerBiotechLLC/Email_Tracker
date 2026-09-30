@@ -37,7 +37,9 @@ export default async function OverviewPage({ params, searchParams }: { params: P
     <div className="space-y-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="text-2xl font-bold">Overview</h1>
-        <p className="text-sm text-muted-foreground">{f.fromDay} → {f.toDay}{sp.denied ? " · Settings are admin-only" : ""}</p>
+        <p className="text-sm text-muted-foreground">
+          {f.fromDay} → {f.toDay}{sp.denied ? " · Settings are admin-only" : ""} · <Link href={`${base}/summary` + withParams(sp, { range: null, from: null, to: null, page: null, denied: null })} className="underline">Daily / weekly summary</Link>
+        </p>
       </div>
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6" aria-label="Key figures">

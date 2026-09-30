@@ -3,11 +3,12 @@
  * (no Graph credentials needed). Run against any Postgres:
  *   DATABASE_URL=... AZURE_TENANT_ID=t AZURE_CLIENT_ID=c AZURE_CLIENT_SECRET=s pnpm exec tsx scripts/fake-sync.ts
  */
-import { getDb, disconnectDb, syncMailbox, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
+import { getDb, disconnectDb, syncMailbox, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, summarizePeriod, latestPeriodSummary, mailboxScope, SUMMARY_TOOL_NAME, PERIOD_SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { MailProvider, RawMessage, ListChangesOptions, DeltaPage, ListChangesResult, SubscriptionInfo, MailUser } from "../src/mail/provider.js";
 
 const OWNER = "sales@example-pharma.com";
+const REG = "regulatory@example-pharma.com";
 const d = (s: string) => new Date(s);
 
 function msg(p: Partial<RawMessage> & { id: string; receivedAt: Date; subject: string }): RawMessage {
@@ -19,7 +20,7 @@ function msg(p: Partial<RawMessage> & { id: string; receivedAt: Date; subject: s
 }
 
 const inbox: RawMessage[] = [
-  msg({ id: "m1", subject: "PO 4512 – Paracetamol", receivedAt: d("2026-09-01T08:00:00Z"),
+  msg({ id: "m1", subject: "PO 4512 – Paracetamol", receivedAt: d("2026-09-01T08:00:00Z"), cc: [{ address: REG, name: "Regulatory" }],
     body: { contentType: "html", content: "<p>Please quote 500 units.</p><br>Best regards,<br>Ali" }, lastVerb: 102, lastVerbAt: d("2026-09-01T10:05:00Z") }),
   msg({ id: "m3", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-02T09:00:00Z"),
     body: { contentType: "text", content: "Thanks, confirmed.\n\nOn Mon, Sales wrote:\n> Quote attached" },
@@ -30,16 +31,23 @@ const inbox: RawMessage[] = [
 ];
 const sent: RawMessage[] = [
   msg({ id: "m2", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-01T10:00:00Z"), from: { address: OWNER, name: "Sales" },
-    to: [{ address: "ali@customer.com", name: "Ali" }], headers: [{ name: "In-Reply-To", value: "<m1@x>" }] }),
+    to: [{ address: "ali@customer.com", name: "Ali" }], cc: [{ address: REG, name: "Regulatory" }], headers: [{ name: "In-Reply-To", value: "<m1@x>" }] }),
+];
+// What regulatory@ (Cc'd on the thread) sees: its own Graph ids, the same Message-IDs.
+const regInbox: RawMessage[] = [
+  msg({ id: "m1-cc", subject: "PO 4512 – Paracetamol", receivedAt: d("2026-09-01T08:00:01Z"), internetMessageId: "<m1@x>", cc: [{ address: REG, name: "Regulatory" }], body: { contentType: "text", content: "Please quote 500 units." } }),
+  msg({ id: "m2-cc", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-01T10:00:01Z"), internetMessageId: "<m2@x>", from: { address: OWNER, name: "Sales" },
+    to: [{ address: "ali@customer.com", name: "Ali" }], cc: [{ address: REG, name: "Regulatory" }], headers: [{ name: "In-Reply-To", value: "<m1@x>" }] }),
 ];
 
 class FakeProvider implements MailProvider {
   calls = 0;
+  constructor(private readonly inboxMessages: RawMessage[] = inbox, private readonly sentMessages: RawMessage[] = sent) {}
   async resolveUser(): Promise<MailUser> { return { id: "u1", displayName: "Sales", mail: OWNER, userPrincipalName: OWNER, proxyAddresses: [] }; }
   async *listChanges(opts: ListChangesOptions): AsyncGenerator<DeltaPage, ListChangesResult, void> {
     this.calls++;
     if (opts.deltaLink) { yield { messages: [], removedIds: [] }; return { deltaLink: opts.deltaLink }; }
-    const all = opts.folder === "inbox" ? inbox : sent;
+    const all = opts.folder === "inbox" ? this.inboxMessages : this.sentMessages;
     yield { messages: all.slice(0, 2), removedIds: [] };
     if (opts.onProgress) await opts.onProgress(`next:${opts.folder}`);
     yield { messages: all.slice(2), removedIds: ["gone"] };
@@ -78,7 +86,7 @@ try {
 
   const t1 = await db.thread.findUniqueOrThrow({ where: { mailboxId_conversationId: { mailboxId: mb.id, conversationId: "conv-1" } } });
   assert(t1.messageCount === 3 && t1.normalizedSubject === "po 4512 – paracetamol", `thread grouped: ${t1.messageCount} msgs, "${t1.normalizedSubject}"`);
-  assert(t1.status === "awaiting_us" && (t1.participants as unknown[]).length === 2, "thread status/participants");
+  assert(t1.status === "awaiting_us" && (t1.participants as unknown[]).length === 3, "thread status/participants (Ali, sales, Cc'd regulatory)");
   assert(t1.firstMessageAt.toISOString() === "2026-09-01T08:00:00.000Z" && t1.lastMessageAt.toISOString() === "2026-09-02T09:00:00.000Z", "thread time range");
 
   // Phase 2: reply detection + status (m1 received 08:00Z = 12:00 Dubai, Tue 1 Sep 2026)
@@ -177,6 +185,50 @@ try {
   console.log("reset sync");
   const s3 = await syncMailbox(mb.id, { provider, reset: true });
   assert(s3.folders.inbox.upserted === 3 && (await db.message.count({ where: { mailboxId: mb.id } })) === 4, "reset re-upserts without duplicates");
+
+  // Copies across mailboxes: regulatory@ was Cc'd on the thread and on our reply-all.
+  console.log("copies across mailboxes (Cc'd colleague)");
+  assert(m1.internalRecipients.length === 1 && m1.internalRecipients[0] === REG, "m1 lists the Cc'd colleague as an in-company recipient");
+  const mb2 = await db.mailbox.create({ data: { orgId: org.id, emailAddress: REG, graphUserId: "u2" } });
+  const s4 = await syncMailbox(mb2.id, { provider: new FakeProvider(regInbox, []) });
+  assert(s4.folders.inbox.upserted === 2 && s4.duplicates === 2, `regulatory sync: 2 upserted, both linked as copies (got ${s4.duplicates})`);
+  assert(s4.siblingThreadsRecomputed === 1, `sales thread recomputed as a sibling (got ${s4.siblingThreadsRecomputed})`);
+  const m1cc = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m1-cc" } });
+  const m2cc = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m2-cc" } });
+  assert(m1cc.duplicateOfId === m1.id && m1cc.internalRecipients[0] === OWNER, "Cc copy of m1 → copy of the sales row (sales was in To)");
+  assert(m2cc.direction === "inbound" && m2cc.duplicateOfId === m2.id, "inbox copy of our reply-all → copy of the Sent Items row");
+  assert(m1cc.repliedAt?.toISOString() === "2026-09-01T10:00:00.000Z" && m1cc.replyMethod === "header_match" && m1cc.repliedByMessageId === m2.id, "sales' reply answers regulatory's copy (cross-mailbox header match)");
+  const tReg = await db.thread.findUniqueOrThrow({ where: { mailboxId_conversationId: { mailboxId: mb2.id, conversationId: "conv-1" } } });
+  assert(tReg.duplicateOfId === t1.id && tReg.status === "awaiting_them", `regulatory thread is a copy of the sales thread and not waiting (${tReg.status})`);
+  const allScope = mailboxScope({ orgId: org.id });
+  assert((await db.message.count({ where: { ...allScope, direction: "inbound" } })) === 3 && (await db.message.count({ where: { mailboxId: mb2.id, direction: "inbound" } })) === 2, "all-mailboxes counts once; the single mailbox still sees its copies");
+  assert((await db.thread.count({ where: { ...allScope, conversationId: "conv-1" } })) === 1, "all-mailboxes lists the conversation once");
+  const callsBefore = aiCalls;
+  const copied = await summarizeThread(tReg.id, { client: fakeAi(summaryInput), force: true });
+  const tRegAi = await db.thread.findUniqueOrThrow({ where: { id: tReg.id } });
+  assert(copied.outcome === "skipped" && copied.reason === "duplicate_copied" && aiCalls === callsBefore && tRegAi.summary === (await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).summary, "copy thread inherits the primary's summary without an API call");
+  // Our own reply is also a primary message in regulatory's view only when addressed To it: send one directly.
+  const direct = msg({ id: "m8", subject: "Internal: stock count", conversationId: "conv-3", receivedAt: d("2026-09-06T09:00:00Z"), internetMessageId: "<m8@x>", from: { address: OWNER, name: "Sales" }, to: [{ address: REG, name: "Regulatory" }] });
+  await syncMailbox(mb.id, { provider: new FakeProvider(inbox, [...sent, { ...direct, id: "m8-sent", receivedAt: d("2026-09-06T09:00:00Z") }]), reset: true });
+  await syncMailbox(mb2.id, { provider: new FakeProvider([...regInbox, direct], []), reset: true });
+  const m8 = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m8" } });
+  const tDirect = await db.thread.findUniqueOrThrow({ where: { mailboxId_conversationId: { mailboxId: mb2.id, conversationId: "conv-3" } } });
+  assert(m8.duplicateOfId === null && tDirect.duplicateOfId === null && tDirect.status === "awaiting_us", "an internal email addressed To the colleague stays a real inbound request");
+
+  // Period summary (mocked client): figures from the DB, text from the model.
+  console.log("period summary (mocked client)");
+  const fakePeriodAi: SummaryClient = { messages: { create: async () => { aiCalls++; return { id: "p", type: "message", role: "assistant", model: "claude-sonnet-5-5", stop_reason: "tool_use", stop_sequence: null,
+    content: [{ type: "tool_use", id: "t", name: PERIOD_SUMMARY_TOOL_NAME, input: { overview: "One customer thread, answered.", received: ["Ali asked for a quote for 500 units"], sent: ["Quote sent to Ali"], needs_attention: [] } }], usage: { input_tokens: 700, output_tokens: 90, cache_read_input_tokens: 0, cache_creation_input_tokens: 600 } } as unknown as Anthropic.Message; } } as unknown as Anthropic["messages"] };
+  const at = d("2026-09-10T08:00:00Z");
+  const pAll = await summarizePeriod({ orgId: org.id, mailboxId: null, period: "month", now: at, client: fakePeriodAi, createdBy: "check" });
+  assert(pAll.outcome === "summarized" && pAll.stats?.received === 3 && pAll.stats.sent === 2 && pAll.stats.replied === 1 && pAll.stats.threads === 3 && pAll.stats.mailboxes === 2, `all mailboxes, last 30 days: ${JSON.stringify(pAll.stats)}`);
+  assert(pAll.record?.overview === "One customer thread, answered." && pAll.record.costUsd > 0 && pAll.record.scopeKey === "all", "digest stored with cost");
+  const pReg = await summarizePeriod({ orgId: org.id, mailboxId: mb2.id, period: "month", now: at, client: fakePeriodAi });
+  assert(pReg.stats?.received === 3 && pReg.stats.sent === 0 && pReg.stats.threads === 2, `single mailbox keeps its copies: ${JSON.stringify(pReg.stats)}`);
+  const pEmpty = await summarizePeriod({ orgId: org.id, mailboxId: null, period: "day", now: d("2026-12-01T08:00:00Z"), client: fakePeriodAi });
+  assert(pEmpty.outcome === "skipped" && pEmpty.reason === "no_activity", "empty window → skipped without an API call");
+  const latest = await latestPeriodSummary(db, org.id, null, "month");
+  assert(latest?.id === pAll.record?.id && (await db.periodSummary.count({ where: { orgId: org.id } })) === 2, "latest digest per scope/period retrievable");
 
   await db.organization.deleteMany({ where: { domain: "example-pharma.com" } });
   console.log("\nALL CHECKS PASSED");
