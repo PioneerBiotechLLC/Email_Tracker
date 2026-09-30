@@ -7,3 +7,4 @@ dist/
 packages/core/src/generated/
 *.log
 .DS_Store
+*.tsbuildinfo

@@ -2,15 +2,15 @@ import type { NextAuthConfig } from "next-auth";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 
 /**
- * Edge-safe part of the Auth.js config (no database imports) — used by the
- * middleware. The provider reads AUTH_MICROSOFT_ENTRA_ID_ID / _SECRET / _ISSUER.
+ * Edge-safe part of the Auth.js config (no database imports) — used by the middleware.
+ * Multi-tenant login: the "organizations" issuer accepts work accounts from any
+ * Microsoft 365 tenant; Auth.js re-runs OIDC discovery for the token's tenant.
+ * Access is still limited to emails with a Membership (or owners) — see auth.ts.
  */
-// Empty AUTH_MICROSOFT_ENTRA_ID_* values (e.g. a fresh .env) must not be passed as "" — the
-// provider treats a present-but-empty issuer as invalid. Only forward values that are set.
 const entra = MicrosoftEntraID({
   ...(process.env.AUTH_MICROSOFT_ENTRA_ID_ID ? { clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID } : {}),
   ...(process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET ? { clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET } : {}),
-  ...(process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER ? { issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER } : { issuer: "https://login.microsoftonline.com/common/v2.0" }),
+  issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER || "https://login.microsoftonline.com/organizations/v2.0",
 });
 
 export const authConfig = {
@@ -20,12 +20,11 @@ export const authConfig = {
   trustHost: true,
   callbacks: {
     authorized({ auth }) {
-      return !!auth?.user?.orgId;
+      return !!auth?.user?.userId;
     },
     session({ session, token }) {
-      session.user.orgId = token.orgId as string;
-      session.user.role = token.role as "admin" | "viewer";
       session.user.userId = token.userId as string;
+      session.user.isOwner = !!token.isOwner;
       return session;
     },
   },
@@ -33,6 +32,6 @@ export const authConfig = {
 
 declare module "next-auth" {
   interface Session {
-    user: { orgId: string; role: "admin" | "viewer"; userId: string; email?: string | null; name?: string | null; image?: string | null };
+    user: { userId: string; isOwner: boolean; email?: string | null; name?: string | null; image?: string | null };
   }
 }

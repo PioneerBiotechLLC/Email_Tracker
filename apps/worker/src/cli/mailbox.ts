@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { GraphProvider, disconnectDb, getDb, getEnv } from "@email-tracker/core";
+import { GraphProvider, disconnectDb, ensureSubscription, getDb, getEnv, slugify } from "@email-tracker/core";
 
 const program = new Command().name("mailbox").description("Register and manage tracked mailboxes");
 
@@ -18,17 +18,17 @@ program
     const domain = (opts.orgDomain ?? address.split("@")[1] ?? "").toLowerCase();
     if (!domain) throw new Error("Could not determine the organization domain");
 
-    const org =
-      (await db.organization.findUnique({ where: { domain } })) ??
-      (await db.organization.create({
-        data: {
-          name: opts.orgName ?? domain,
-          domain,
-          azureTenantId: opts.tenant ?? env.AZURE_TENANT_ID,
-          timezone: opts.timezone,
-        },
-      }));
-    console.log(`Organization: ${org.name} (${org.domain}) tenant=${org.azureTenantId}`);
+    const tenantId = opts.tenant ?? env.AZURE_TENANT_ID ?? null;
+    let org = await db.organization.findUnique({ where: { domain } });
+    if (!org) {
+      org = await db.organization.create({
+        data: { name: opts.orgName ?? domain, slug: slugify(opts.orgName ?? domain.split(".")[0]!), domain, azureTenantId: tenantId, consentGrantedAt: tenantId ? new Date() : null, timezone: opts.timezone },
+      });
+    } else if (!org.azureTenantId && tenantId) {
+      org = await db.organization.update({ where: { id: org.id }, data: { azureTenantId: tenantId, consentGrantedAt: new Date() } });
+    }
+    if (!org.azureTenantId) throw new Error(`Company ${org.name} has no Microsoft 365 tenant yet. Pass --tenant <id> or connect it in the dashboard (Companies → Connect Microsoft 365).`);
+    console.log(`Company: ${org.name} (/c/${org.slug}, ${org.domain}) tenant=${org.azureTenantId}`);
 
     const provider = new GraphProvider(org.azureTenantId);
     const user = await provider.resolveUser(address);
@@ -55,6 +55,8 @@ program
     console.log(`Mailbox ready: ${mailbox.emailAddress} (${mailbox.displayName ?? "no name"})`);
     console.log(`  graphUserId: ${mailbox.graphUserId}`);
     if (aliases.length) console.log(`  aliases: ${aliases.join(", ")}`);
+    const sub = await ensureSubscription(db, mailbox.id);
+    console.log(sub.action === "skipped" ? `  live notifications: skipped (${sub.detail})` : sub.action === "error" ? `  live notifications: FAILED (${sub.detail})` : `  live notifications: subscription ${sub.action}, expires ${sub.expiresAt?.toISOString()}`);
     console.log(`\nNext: pnpm sync:once ${mailbox.emailAddress}`);
   });
 

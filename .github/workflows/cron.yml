@@ -1,0 +1,19 @@
+# Every-15-minutes jobs for the serverless deployment (Vercel Hobby only allows daily crons).
+# Secrets: APP_URL (e.g. https://tracker.example.com) and CRON_SECRET (same value as in Vercel).
+# On Vercel Pro these two calls can move into apps/web/vercel.json as "*/15 * * * *" crons instead.
+name: cron
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+jobs:
+  sync-and-summarize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Sync mailboxes (safety net)
+        run: |
+          curl -sS --fail-with-body --max-time 90 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ secrets.APP_URL }}/api/cron/sync"
+      - name: Summarize threads
+        run: |
+          curl -sS --fail-with-body --max-time 90 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ secrets.APP_URL }}/api/cron/summarize"

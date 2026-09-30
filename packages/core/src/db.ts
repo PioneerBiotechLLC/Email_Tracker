@@ -8,8 +8,10 @@ const g = globalThis as unknown as { __emailTrackerDb?: PrismaClient };
 function poolOptions(url: string) {
   // Honour Prisma-style `connection_limit` / `pool_timeout` in the URL so hosted
   // Postgres (Supabase/Neon poolers) and the local `prisma dev` server behave.
-  let max = 10;
-  let idleTimeoutMillis = 30_000;
+  // Serverless (Vercel) functions each hold their own pool: keep it small so many
+  // concurrent instances stay under Neon's connection cap (the pooled URL helps too).
+  let max = process.env.VERCEL ? 3 : 10;
+  let idleTimeoutMillis = process.env.VERCEL ? 10_000 : 30_000;
   try {
     const u = new URL(url);
     const limit = Number(u.searchParams.get("connection_limit"));

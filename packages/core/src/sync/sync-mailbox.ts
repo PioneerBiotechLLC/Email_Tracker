@@ -14,6 +14,8 @@ const log = createLogger("sync");
 export interface SyncOptions {
   /** Ignore saved delta links and re-run the initial backfill. */
   reset?: boolean;
+  /** Stop after the current page once this time passes (serverless time limits); progress is saved and resumes next run. */
+  deadlineAt?: Date;
   /** Override BACKFILL_DAYS for the initial backfill. */
   backfillDays?: number;
   provider?: MailProvider;
@@ -25,20 +27,23 @@ export interface SyncStats {
   threadsRecomputed: number;
   /** conversation ids that received new/updated messages (for AI summarization) */
   touchedConversationIds: string[];
+  /** true when the deadline stopped the sync before both folders were complete */
+  partial: boolean;
   durationMs: number;
 }
 
 const FOLDERS: SyncFolder[] = ["inbox", "sentitems"];
 
 /** Upserts one Graph message (and its thread shell). Returns the conversation id touched. */
-async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFolder, raw: RawMessage, owners: Set<string>): Promise<string> {
+async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFolder, raw: RawMessage, owners: Set<string>, previewOnly = false): Promise<string> {
   const conversationId = raw.conversationId ?? `noconv:${raw.id}`;
   const fromAddress = raw.from?.address ?? "";
   const direction: "inbound" | "outbound" =
     folder === "sentitems" || (fromAddress && owners.has(fromAddress)) ? "outbound" : "inbound";
   const { inReplyTo, references, isAutoReply } = extractReplyHeaders(raw.headers, raw.subject);
   const body = cleanBody(raw.body, raw.bodyPreview);
-  const stored = protectBody(body);
+  // "preview only" storage keeps the DB small: no body text, the 500-char preview only.
+  const stored = previewOnly ? { bodyText: null, bodyEncrypted: false } : protectBody(body);
   const orderAt = direction === "outbound" && raw.sentAt ? raw.sentAt : raw.receivedAt;
 
   const thread = await db.thread.upsert({
@@ -110,7 +115,8 @@ export async function syncMailbox(mailboxId: string, opts: SyncOptions = {}): Pr
 async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncOptions): Promise<SyncStats> {
   const started = Date.now();
   const mailbox = await db.mailbox.findUniqueOrThrow({ where: { id: mailboxId }, include: { org: true } });
-  const provider = opts.provider ?? new GraphProvider(mailbox.org.azureTenantId);
+  if (!opts.provider && !mailbox.org.azureTenantId) throw new Error(`Company ${mailbox.org.name} is not connected to Microsoft 365 yet (no tenant id)`);
+  const provider = opts.provider ?? new GraphProvider(mailbox.org.azureTenantId!);
   const owners = ownerAddresses(mailbox);
   const sinceDays = opts.backfillDays ?? getEnv().BACKFILL_DAYS;
   const touched = new Set<string>();
@@ -123,10 +129,13 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
     },
     threadsRecomputed: 0,
     touchedConversationIds: [],
+    partial: false,
     durationMs: 0,
   };
+  const previewOnly = mailbox.org.bodyStorage === "preview_only";
 
   for (const folder of FOLDERS) {
+    if (stats.partial) break;
     const linkField = folder === "inbox" ? "inboxDeltaLink" : "sentDeltaLink";
     const savedLink = opts.reset ? null : mailbox[linkField];
     const fstats = stats.folders[folder];
@@ -145,7 +154,7 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
     for (;;) {
       const step = await gen.next();
       if (step.done) {
-        await saveLink(step.value.deltaLink);
+        if (step.value.deltaLink) await saveLink(step.value.deltaLink);
         break;
       }
       const page = step.value;
@@ -156,10 +165,17 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
           fstats.skippedDrafts += 1;
           continue;
         }
-        touched.add(await upsertMessage(db, mailbox, folder, raw, owners));
+        touched.add(await upsertMessage(db, mailbox, folder, raw, owners, previewOnly));
         fstats.upserted += 1;
       }
       log.debug(`page done`, { folder, page: fstats.pages, messages: page.messages.length });
+      if (opts.deadlineAt && Date.now() >= opts.deadlineAt.getTime()) {
+        // The nextLink for this page was already saved by onProgress; the next run continues from it.
+        log.info("deadline reached; sync will resume on the next run", { folder, pages: fstats.pages });
+        stats.partial = true;
+        await gen.return({ deltaLink: "" });
+        break;
+      }
     }
     log.info(`${folder} done`, { ...fstats });
   }
@@ -174,4 +190,30 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
   stats.durationMs = Date.now() - started;
   log.info("sync complete", { mailbox: mailbox.emailAddress, threads: stats.threadsRecomputed, ms: stats.durationMs });
   return stats;
+}
+
+const LOCK_STALE_MS = 10 * 60_000;
+
+/** Takes the per-mailbox sync lock (webhook and cron may overlap). Returns false when another sync is running. */
+export async function acquireSyncLock(db: PrismaClient, mailboxId: string, now = new Date()): Promise<boolean> {
+  const r = await db.mailbox.updateMany({
+    where: { id: mailboxId, OR: [{ syncLockedAt: null }, { syncLockedAt: { lt: new Date(now.getTime() - LOCK_STALE_MS) } }] },
+    data: { syncLockedAt: now },
+  });
+  return r.count === 1;
+}
+
+export async function releaseSyncLock(db: PrismaClient, mailboxId: string): Promise<void> {
+  await db.mailbox.update({ where: { id: mailboxId }, data: { syncLockedAt: null } }).catch(() => undefined);
+}
+
+/** Sync with the lock held; returns null when the mailbox is already being synced. */
+export async function syncMailboxLocked(mailboxId: string, opts: SyncOptions = {}): Promise<SyncStats | null> {
+  const db = getDb();
+  if (!(await acquireSyncLock(db, mailboxId))) return null;
+  try {
+    return await syncMailbox(mailboxId, opts);
+  } finally {
+    await releaseSyncLock(db, mailboxId);
+  }
 }

@@ -183,7 +183,7 @@ export async function prepareThread(db: PrismaClient, thread: ThreadWithOrg): Pr
   const tz = thread.mailbox.org.timezone;
   const input = buildThreadInput(messages, { timezone: tz });
   const lang: SummaryLanguage = thread.mailbox.org.summaryLanguage === "ar" ? "ar" : "en";
-  const system = systemPrompt(lang);
+  const system = systemPrompt(lang, thread.mailbox.org.aiContext);
   const user = userMessage({ subject: thread.subject, mailboxAddress: thread.mailbox.emailAddress, orgName: thread.mailbox.org.name, timezone: tz }, input);
   const model = chooseModel(messages.length, input.text.length, env);
   return {
@@ -315,6 +315,9 @@ export async function summarizeThread(threadId: string, opts: SummarizeOptions =
 
 export interface SummarizeManyOptions extends SummarizeOptions {
   mailboxId?: string;
+  orgId?: string;
+  /** stop before this time (serverless limits); remaining threads wait for the next run */
+  deadlineAt?: Date;
   /** restrict to these conversation ids (e.g. the ones a sync just touched) */
   conversationIds?: string[];
   limit?: number;
@@ -334,7 +337,7 @@ export interface SummarizeManyResult {
 export async function summarizeThreads(opts: SummarizeManyOptions = {}): Promise<SummarizeManyResult> {
   const db = getDb();
   const where: Prisma.ThreadWhereInput = {
-    ...(opts.mailboxId ? { mailboxId: opts.mailboxId } : { mailbox: { isActive: true } }),
+    ...(opts.mailboxId ? { mailboxId: opts.mailboxId } : { mailbox: { isActive: true, ...(opts.orgId ? { orgId: opts.orgId } : {}) } }),
     ...(opts.conversationIds ? { conversationId: { in: opts.conversationIds } } : {}),
   };
   // Prisma can't compare two columns; filter messageCount > summaryMessageCount in JS.
@@ -343,6 +346,7 @@ export async function summarizeThreads(opts: SummarizeManyOptions = {}): Promise
 
   const out: SummarizeManyResult = { candidates: candidates.length, summarized: 0, skipped: {}, errors: 0, costUsd: 0, capReached: false };
   for (const t of candidates) {
+    if (opts.deadlineAt && Date.now() >= opts.deadlineAt.getTime()) break;
     const r = await summarizeThread(t.id, opts);
     opts.onResult?.(r);
     if (r.outcome === "summarized") out.summarized += 1;

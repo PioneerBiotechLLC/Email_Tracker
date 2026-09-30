@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
+  "buildCommand": "cd ../.. && pnpm --filter @email-tracker/web build",
+  "crons": [
+    {
+      "path": "/api/cron/renew-subscriptions",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/retention",
+      "schedule": "30 3 * * *"
+    }
+  ]
+}

@@ -169,12 +169,16 @@ async function remove() {
 }
 
 async function seed() {
+  if (process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production") throw new Error("Refusing to seed demo data into a production environment.");
   const db = getDb();
   await db.organization.deleteMany({ where: { domain: DOMAIN } });
-  const org = await db.organization.create({ data: { name: "Demo Pharma (DEMO DATA)", domain: DOMAIN, azureTenantId: "00000000-0000-0000-0000-000000000000", isDemo: true, digestRecipients: [ADMIN] } });
+  const org = await db.organization.create({ data: { name: "Demo Pharma (DEMO DATA)", slug: "demo-pharma", domain: DOMAIN, azureTenantId: null, isDemo: true, digestRecipients: [ADMIN], aiContext: "Demo pharmaceutical trading company (fake data)." } });
   const mbs = [];
   for (const email of MAILBOXES) mbs.push(await db.mailbox.create({ data: { orgId: org.id, emailAddress: email, displayName: email.split("@")[0]!.replace(/^\w/, (c) => c.toUpperCase()), graphUserId: `demo-${email}`, lastSyncedAt: hoursAgo(1) } }));
-  await db.appUser.createMany({ data: [{ orgId: org.id, email: ADMIN, name: "Demo Admin", role: "admin" }, { orgId: org.id, email: VIEWER, name: "Demo Viewer", role: "viewer" }] });
+  for (const [email, name, role] of [[ADMIN, "Demo Admin", "admin"], [VIEWER, "Demo Viewer", "viewer"]] as const) {
+    const u = await db.appUser.upsert({ where: { email }, create: { email, name, isActive: true }, update: { isActive: true } });
+    await db.membership.upsert({ where: { userId_orgId: { userId: u.id, orgId: org.id } }, create: { userId: u.id, orgId: org.id, role }, update: { role } });
+  }
 
   let n = 0;
   for (const sc of scenarios) {

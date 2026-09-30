@@ -90,6 +90,14 @@
   --status-muted: oklch(0.65 0 0);
 }
 
+/* Brand font selection: a company layout sets one heading + one body class */
+.font-heading-merriweather { --font-heading: var(--font-merriweather); }
+.font-heading-playfair { --font-heading: var(--font-playfair); }
+.font-heading-inter { --font-heading: var(--font-inter); }
+.font-body-source-sans { --font-body: var(--font-source-sans); }
+.font-body-inter { --font-body: var(--font-inter); }
+.font-body-noto-sans { --font-body: var(--font-noto-sans); }
+
 @layer base {
   * { @apply border-border outline-ring/50; }
   body { @apply bg-background text-foreground font-sans antialiased; }

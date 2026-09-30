@@ -55,7 +55,7 @@ function assert(cond: unknown, label: string) { if (!cond) throw new Error(`ASSE
 const db = getDb();
 try {
   await db.organization.deleteMany({ where: { domain: "example-pharma.com" } });
-  const org = await db.organization.create({ data: { name: "Example", domain: "example-pharma.com", azureTenantId: "t" } });
+  const org = await db.organization.create({ data: { name: "Example", slug: "example-pharma", domain: "example-pharma.com", azureTenantId: "t" } });
   const mb = await db.mailbox.create({ data: { orgId: org.id, emailAddress: OWNER, graphUserId: "u1" } });
   const provider = new FakeProvider();
 

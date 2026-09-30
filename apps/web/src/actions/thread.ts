@@ -2,12 +2,15 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { assertSameOrg, getDb, logAudit, recomputeThread, summarizeThread, ForbiddenError, type Prisma } from "@email-tracker/core";
-import { requireAction } from "@/lib/session";
+import { requireOrgAction } from "@/lib/session";
 
-async function loadThread(threadId: string, orgId: string) {
+/** Loads the thread, checks the caller's membership/role in its company, and returns both. */
+async function loadThread(threadId: string, action: Parameters<typeof requireOrgAction>[1]) {
   const t = await getDb().thread.findUnique({ where: { id: threadId }, include: { mailbox: { select: { orgId: true } } } });
-  assertSameOrg({ orgId }, t?.mailbox);
-  return t!;
+  if (!t) throw new ForbiddenError("Not found in your organization");
+  const ctx = await requireOrgAction(t.mailbox.orgId, action);
+  assertSameOrg(ctx, t.mailbox);
+  return { t, ctx };
 }
 
 const snapshot = (t: { status: string; needsReply: boolean; needsReplyDecidedBy: string | null; closedBy: string | null; category: string; priority: string }) => ({
@@ -15,32 +18,29 @@ const snapshot = (t: { status: string; needsReply: boolean; needsReplyDecidedBy:
 });
 
 export async function closeThread(threadId: string) {
-  const ctx = await requireAction("thread.close");
-  const t = await loadThread(threadId, ctx.orgId);
+  const { t, ctx } = await loadThread(threadId, "thread.close");
   const db = getDb();
   await db.thread.update({ where: { id: threadId }, data: { status: "closed", closedAt: new Date(), closedBy: ctx.email, awaitingSince: null, overdueAt: null } });
   const after = await db.thread.findUniqueOrThrow({ where: { id: threadId } });
   await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "thread.close", targetType: "thread", targetId: threadId, before: snapshot(t), after: snapshot(after) });
-  revalidatePath(`/threads/${threadId}`);
-  revalidatePath("/threads");
+  revalidatePath("/c/[slug]/threads/[id]", "page");
+  revalidatePath("/c/[slug]/threads", "page");
 }
 
 export async function reopenThread(threadId: string) {
-  const ctx = await requireAction("thread.reopen");
-  const t = await loadThread(threadId, ctx.orgId);
+  const { t, ctx } = await loadThread(threadId, "thread.reopen");
   const db = getDb();
   await db.thread.update({ where: { id: threadId }, data: { status: "awaiting_us", closedAt: null, closedBy: null } });
   await recomputeThread(db, t.mailboxId, t.conversationId);
   const after = await db.thread.findUniqueOrThrow({ where: { id: threadId } });
   await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "thread.reopen", targetType: "thread", targetId: threadId, before: snapshot(t), after: snapshot(after) });
-  revalidatePath(`/threads/${threadId}`);
-  revalidatePath("/threads");
+  revalidatePath("/c/[slug]/threads/[id]", "page");
+  revalidatePath("/c/[slug]/threads", "page");
 }
 
 /** User decision on needsReply: sticky until a new inbound message arrives (Phase 3 rules). */
 export async function setNeedsReply(threadId: string, needsReply: boolean) {
-  const ctx = await requireAction("thread.needsReply");
-  const t = await loadThread(threadId, ctx.orgId);
+  const { t, ctx } = await loadThread(threadId, "thread.needsReply");
   const db = getDb();
   await db.thread.update({
     where: { id: threadId },
@@ -49,13 +49,12 @@ export async function setNeedsReply(threadId: string, needsReply: boolean) {
   await recomputeThread(db, t.mailboxId, t.conversationId);
   const after = await db.thread.findUniqueOrThrow({ where: { id: threadId } });
   await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: needsReply ? "thread.needsReply" : "thread.noReplyNeeded", targetType: "thread", targetId: threadId, before: snapshot(t), after: snapshot(after) });
-  revalidatePath(`/threads/${threadId}`);
-  revalidatePath("/threads");
+  revalidatePath("/c/[slug]/threads/[id]", "page");
+  revalidatePath("/c/[slug]/threads", "page");
 }
 
 export async function resummarizeThread(threadId: string) {
-  const ctx = await requireAction("thread.resummarize");
-  const t = await loadThread(threadId, ctx.orgId);
+  const { t, ctx } = await loadThread(threadId, "thread.resummarize");
   const db = getDb();
   let outcome: string;
   let detail = "";
@@ -68,13 +67,13 @@ export async function resummarizeThread(threadId: string) {
     detail = err instanceof Error ? err.message.slice(0, 200) : "unknown error";
   }
   await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "thread.resummarize", targetType: "thread", targetId: threadId, before: { summaryMessageCount: t.summaryMessageCount }, after: { outcome, detail } });
-  revalidatePath(`/threads/${threadId}`);
-  redirect(`/threads/${threadId}?ai=${encodeURIComponent(outcome)}&detail=${encodeURIComponent(detail)}`);
+  const org = await db.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { slug: true } });
+  revalidatePath("/c/[slug]/threads/[id]", "page");
+  redirect(`/c/${org.slug}/threads/${threadId}?ai=${encodeURIComponent(outcome)}&detail=${encodeURIComponent(detail)}`);
 }
 
 export async function classifyThread(threadId: string, formData: FormData) {
-  const ctx = await requireAction("thread.classify");
-  const t = await loadThread(threadId, ctx.orgId);
+  const { t, ctx } = await loadThread(threadId, "thread.classify");
   const category = String(formData.get("category") ?? "");
   const priority = String(formData.get("priority") ?? "");
   const data: Prisma.ThreadUpdateInput = {};
@@ -85,7 +84,7 @@ export async function classifyThread(threadId: string, formData: FormData) {
   await db.thread.update({ where: { id: threadId }, data });
   const after = await db.thread.findUniqueOrThrow({ where: { id: threadId } });
   await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "thread.classify", targetType: "thread", targetId: threadId, before: snapshot(t), after: snapshot(after) });
-  revalidatePath(`/threads/${threadId}`);
+  revalidatePath("/c/[slug]/threads/[id]", "page");
 }
 
 export { ForbiddenError };

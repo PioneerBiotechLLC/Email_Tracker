@@ -9,7 +9,7 @@ export async function getSettings(ctx: SessionContext) {
   const [org, mailboxes, users, usage] = await Promise.all([
     db.organization.findUniqueOrThrow({ where: { id: ctx.orgId } }),
     db.mailbox.findMany({ where: { orgId: ctx.orgId }, orderBy: { emailAddress: "asc" }, include: { _count: { select: { threads: true, messages: true } } } }),
-    db.appUser.findMany({ where: { orgId: ctx.orgId }, orderBy: [{ isActive: "desc" }, { email: "asc" }] }),
+    db.membership.findMany({ where: { orgId: ctx.orgId }, include: { user: true }, orderBy: [{ user: { isActive: "desc" } }, { user: { email: "asc" } }] }),
     usageReport(days, ctx.orgId),
   ]);
   const env = getEnv();

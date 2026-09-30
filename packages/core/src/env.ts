@@ -11,6 +11,14 @@ const schema = z.object({
   AZURE_CLIENT_SECRET: z.string().optional(),
   GRAPH_WEBHOOK_URL: z.string().optional(),
   GRAPH_CLIENT_STATE: z.string().optional(),
+  /** Public URL of the deployed app, e.g. https://tracker.example.com (webhooks, consent callback) */
+  APP_URL: z.string().optional(),
+  /** Bearer secret for /api/cron/* */
+  CRON_SECRET: z.string().optional(),
+  /** Direct (non-pooled) Postgres URL for migrations */
+  DIRECT_URL: z.string().optional(),
+  /** Plan storage limit for the owner-visible indicator (Neon free = 512) */
+  DB_STORAGE_LIMIT_MB: z.coerce.number().positive().default(512),
   ANTHROPIC_API_KEY: z.string().optional(),
   /** Main summarization model */
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-5-5"),

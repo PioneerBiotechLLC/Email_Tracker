@@ -1,5 +1,6 @@
 import type { Client } from "@microsoft/microsoft-graph-client";
 import { getGraphClient, graphBatch, graphErrorCode, graphStatus, withGraphRetry } from "../graph/client.js";
+import { subscriptionExpiry, subscriptionPayload } from "../graph/subscriptions.js";
 import { createLogger } from "../log.js";
 import type { RawHeader } from "./headers.js";
 import type {
@@ -283,11 +284,19 @@ export class GraphProvider implements MailProvider {
     return out;
   }
 
-  // Implemented in Phase 5 (live sync).
-  async subscribe(_userId: string, _notificationUrl: string, _clientState: string): Promise<SubscriptionInfo> {
-    throw new Error("GraphProvider.subscribe is implemented in Phase 5");
+  /** Creates a change-notification subscription on the user's messages. Graph validates notificationUrl synchronously. */
+  async subscribe(userId: string, notificationUrl: string, clientState: string, lifecycleNotificationUrl?: string): Promise<SubscriptionInfo> {
+    const expiresAt = subscriptionExpiry();
+    const body = subscriptionPayload(userId, { notificationUrl, lifecycleNotificationUrl }, clientState, expiresAt);
+    const res = (await withGraphRetry("subscribe", () => this.client.api("/subscriptions").post(body))) as { id: string; expirationDateTime: string };
+    return { id: res.id, expiresAt: new Date(res.expirationDateTime) };
   }
-  async renew(_subscriptionId: string): Promise<SubscriptionInfo> {
-    throw new Error("GraphProvider.renew is implemented in Phase 5");
+
+  async renew(subscriptionId: string): Promise<SubscriptionInfo> {
+    const expiresAt = subscriptionExpiry();
+    const res = (await withGraphRetry("renew", () =>
+      this.client.api(`/subscriptions/${encodeURIComponent(subscriptionId)}`).patch({ expirationDateTime: expiresAt.toISOString() }),
+    )) as { id: string; expirationDateTime: string };
+    return { id: res.id, expiresAt: new Date(res.expirationDateTime) };
   }
 }

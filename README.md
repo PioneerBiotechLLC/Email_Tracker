@@ -2,7 +2,7 @@
 
 Connects to Microsoft 365 mailboxes (read-only), tracks which inbound emails were replied to and how fast, summarizes threads with Claude, and shows it all on a dashboard with a daily digest. Full brief: [SPEC.md](SPEC.md).
 
-**Status: Phase 4 (Dashboard) complete** — on top of Phase 1 (monorepo, Prisma schema, Graph app-only auth, backfill CLI), Phase 2 (reply tracking) and Phase 3 (AI summaries). Phases 5–7 (live sync, digest, deploy) follow.
+**Status: Phase 5 (multi-company + go live) complete** — multiple companies on different Microsoft 365 tenants with a company switcher, serverless live sync (Graph webhooks + cron endpoints) and a Vercel/Neon deployment path. See [docs/DEPLOY.md](docs/DEPLOY.md) for the go-live checklist. The daily digest (Phase 6) is still to come.
 
 ## Hard rules
 
@@ -229,6 +229,25 @@ pnpm test                       # vitest: core logic incl. KPI aggregations and 
 pnpm --filter @email-tracker/web test:e2e   # Playwright smoke tests (seeds the demo org, needs DATABASE_URL; run `pnpm exec playwright install chromium` once)
 ```
 
+## 7. Multiple companies and live sync (Phase 5)
+
+- **Companies** are `Organization` rows, each with its own Microsoft 365 tenant, branding (colors, fonts, logo), business hours, AI context and storage settings. Dashboard URLs are `/c/<slug>/…`; the sidebar has a company switcher, and the last company is remembered in a cookie.
+- **Users** belong to companies through `Membership` (admin or viewer per company). Owners (`pnpm user add <email> --owner`) see and manage every company and the `/companies` page. A user without a membership gets a 404 for that company — the URL is never trusted alone.
+- **Connect Microsoft 365**: the mail-reading Entra app is multi-tenant; each company's tenant admin grants consent through the Companies page (`/api/graph/consent/callback` records the tenant id). The Application Access Policy must then be created in that tenant (docs/DEPLOY.md, step e).
+- **Live sync without a worker**: Graph change notifications hit `/api/graph/webhook` (validation handshake, `clientState` check, 202, then the work runs after the response); lifecycle events hit `/api/graph/lifecycle`. Cron endpoints (bearer `CRON_SECRET`): `/api/cron/sync` (resumable delta sync, time-boxed), `/api/cron/summarize`, `/api/cron/renew-subscriptions`, `/api/cron/retention`. GitHub Actions calls the first two every 15 minutes; Vercel runs the last two daily.
+- **Heavy jobs stay on the laptop**: `pnpm sync:once` (90-day backfill) and `pnpm ai:backfill` run locally against the production `DATABASE_URL`.
+- **Storage**: per-company "store email bodies: full | preview only" and retention days; the Companies page shows database size against the plan limit (`DB_STORAGE_LIMIT_MB`, warns at 80%).
+- **Health**: `/api/health` reports DB reachability, a Graph token check per company and sync freshness, without secrets.
+
+```bash
+pnpm org:seed                      # API Pharma + Pioneer Biotech company records (idempotent)
+pnpm org:seed-pioneer              # Pioneer Biotech only
+pnpm user add me@x.com --owner     # global owner
+pnpm user add a@pbio.tech --org pbio.tech --role admin
+pnpm mailbox add sales@pbio.tech --tenant <tenant-id>
+pnpm --filter @email-tracker/core check:migration   # replays the AppUser → Membership migration in a scratch schema
+```
+
 ## Commands
 
 | Command | What it does |
@@ -244,7 +263,8 @@ pnpm --filter @email-tracker/web test:e2e   # Playwright smoke tests (seeds the 
 | `pnpm ai:summarize <email\|all> [--limit N]` | live summaries for threads with new messages |
 | `pnpm ai:summarize-thread <threadId> [--force]` | summarize one thread, print JSON |
 | `pnpm ai:usage [--days 30]` | Claude calls, tokens and cost |
-| `pnpm user add <email> --org <domain> --role admin\|viewer` / `user list` / `user remove <email>` | dashboard users |
+| `pnpm user add <email> [--org <domain> --role admin\|viewer] [--owner]` / `user list` / `user remove <email> [--org <domain>]` | dashboard users and memberships |
+| `pnpm org:seed` / `org:seed-pioneer` / `org:seed-api-pharma` | known company records |
 | `pnpm dev` / `pnpm build` / `pnpm start` | web dashboard |
 | `pnpm db:seed-demo [--remove]` | demo organization with 40 fake threads |
 | `pnpm --filter @email-tracker/web test:e2e` | Playwright smoke tests |

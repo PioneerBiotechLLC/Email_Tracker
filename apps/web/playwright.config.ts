@@ -22,6 +22,6 @@ export default defineConfig({
     url: `http://localhost:${PORT}/signin`,
     reuseExistingServer: false,
     timeout: 180_000,
-    env: { NODE_ENV: "test", E2E_BYPASS_EMAIL: "demo-admin@demo-pharma.example", AUTH_SECRET: process.env.AUTH_SECRET ?? "e2e-test-secret-not-for-production", AUTH_TRUST_HOST: "true" },
+    env: { NODE_ENV: "test", E2E_BYPASS_EMAIL: "demo-admin@demo-pharma.example", AUTH_SECRET: process.env.AUTH_SECRET ?? "e2e-test-secret-not-for-production", AUTH_TRUST_HOST: "true", GRAPH_CLIENT_STATE: "e2e-client-state", CRON_SECRET: "e2e-cron-secret-long-enough-value" },
   },
 });

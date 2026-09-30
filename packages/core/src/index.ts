@@ -12,7 +12,7 @@ export type * from "./mail/provider.js";
 export { normalizeSubject, isAutoReplySubject } from "./mail/subject.js";
 export { extractReplyHeaders, headerMap, parseMessageIds, normalizeMessageId } from "./mail/headers.js";
 export { cleanBody, htmlToText, stripQuotedHistory, stripSignature, tidyWhitespace } from "./mail/text.js";
-export { syncMailbox, type SyncOptions, type SyncStats } from "./sync/sync-mailbox.js";
+export { syncMailbox, syncMailboxLocked, acquireSyncLock, releaseSyncLock, type SyncOptions, type SyncStats } from "./sync/sync-mailbox.js";
 export { recomputeThread, recomputeMailboxThreads, businessHoursFor, slaHoursFor, ownerAddresses } from "./sync/threads.js";
 export {
   detectReplies, computeThreadStatus, effectiveTime, isFromUs, isRealInbound, isRealOutbound, REPLY_VERBS, FORWARD_VERB,
@@ -34,3 +34,12 @@ export { can, assertCan, assertSameOrg, mailboxScope, ForbiddenError, type Role,
 export { logAudit, type AuditEntry } from "./auth/audit.js";
 export { computeKpis, bucketByDay, slowestSenders, worstStatus, inboundStatus, median, average, dayKey, senderKey, type InboundRow, type Kpis, type DayBucket, type SenderStat, type ThreadStatusName } from "./stats/kpis.js";
 export { requireGraphEnv } from "./env.js";
+export { parseNotifications, validationTokenFrom, subscriptionIds, type GraphNotification, type LifecycleEvent, type ParsedNotifications } from "./graph/webhook.js";
+export { subscriptionAction, subscriptionExpiry, subscriptionPayload, webhookUrls, MAX_SUBSCRIPTION_MINUTES, RENEW_WITHIN_MS, type SubscriptionAction, type SubscriptionUrls } from "./graph/subscriptions.js";
+export { ensureSubscription, renewAllSubscriptions, type EnsureResult } from "./graph/subscription-manager.js";
+export { isAuthorizedCron } from "./cron/auth.js";
+export { signConsentState, verifyConsentState, adminConsentUrl } from "./auth/consent.js";
+export { resolveOrgRole, visibleOrgs, pickOrg, isValidSlug, slugify, type MembershipLike, type UserLike, type OrgLike } from "./auth/membership.js";
+export { purgeExpired, type RetentionResult } from "./ops/retention.js";
+export { databaseStorage, formatBytes, type StorageInfo } from "./ops/storage.js";
+export { healthReport, type HealthReport } from "./ops/health.js";

@@ -26,7 +26,10 @@
     "user": "pnpm --filter @email-tracker/worker user",
     "db:seed-demo": "pnpm --filter @email-tracker/core seed-demo",
     "db:local": "pnpm --filter @email-tracker/core dev-db",
-    "dev:lan": "pnpm --filter @email-tracker/web dev:lan"
+    "dev:lan": "pnpm --filter @email-tracker/web dev:lan",
+    "org:seed": "pnpm --filter @email-tracker/core seed-orgs",
+    "org:seed-pioneer": "pnpm --filter @email-tracker/core seed-orgs pioneer",
+    "org:seed-api-pharma": "pnpm --filter @email-tracker/core seed-orgs api-pharma"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

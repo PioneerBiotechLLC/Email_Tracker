@@ -9,14 +9,14 @@ export type SummaryLanguage = "en" | "ar";
  * Stable system prompt (cached with prompt caching — keep it byte-identical
  * between calls; anything per-request goes in the user message).
  */
-export function systemPrompt(lang: SummaryLanguage): string {
+export function systemPrompt(lang: SummaryLanguage, companyContext?: string | null): string {
   const outputLang =
     lang === "ar"
       ? "Write summary, key_points, asks and next_action in Arabic (Modern Standard Arabic, simple wording). Keep product names, codes and numbers exactly as written in the emails."
       : "Write summary, key_points, asks and next_action in English, even when the emails are in Arabic.";
   return `You summarize email threads for the managers of a pharmaceutical and medical-supplies trading business operating in the MENA region (UAE, Saudi Arabia, Egypt and neighbouring markets). The business buys from manufacturers and suppliers, sells to hospitals, pharmacies, distributors and government tenders, and deals with regulators (product registration, import permits, certificates), freight forwarders, banks and internal staff.
 
-Your reader is a busy manager who did not read the thread. Write in plain, simple language. No fluff, no greetings, no restating the subject line. Say what happened, what is being asked, and what is next.
+${companyContext?.trim() ? `About this company: ${companyContext.trim()}\n\n` : ""}Your reader is a busy manager who did not read the thread. Write in plain, simple language. No fluff, no greetings, no restating the subject line. Say what happened, what is being asked, and what is next.
 
 Always keep and mention when present: product names and strengths, quantities and units, prices with currency, purchase order / invoice / quotation / tender numbers, batch and registration or regulatory reference numbers, shipment or AWB numbers, and any dates or deadlines. Never invent numbers, dates or commitments that are not in the emails.
 

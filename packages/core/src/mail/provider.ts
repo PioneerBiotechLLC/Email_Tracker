@@ -72,6 +72,6 @@ export interface MailProvider {
   resolveUser(emailOrUpn: string): Promise<MailUser>;
   listChanges(opts: ListChangesOptions): AsyncGenerator<DeltaPage, ListChangesResult, void>;
   getMessages(userId: string, ids: string[]): Promise<RawMessage[]>;
-  subscribe(userId: string, notificationUrl: string, clientState: string): Promise<SubscriptionInfo>;
+  subscribe(userId: string, notificationUrl: string, clientState: string, lifecycleNotificationUrl?: string): Promise<SubscriptionInfo>;
   renew(subscriptionId: string): Promise<SubscriptionInfo>;
 }

@@ -64,11 +64,24 @@ enum DecisionSource {
   ai
 }
 
+/// How much of each email body is kept in our database
+enum BodyStorage {
+  full
+  preview_only
+}
+
 model Organization {
   id              String   @id @default(cuid())
   name            String
+  /// URL slug: /c/<slug>/…
+  slug            String   @unique
+  /// Primary email domain (also used as the org key in the CLI)
   domain          String   @unique
-  azureTenantId   String
+  /// Additional email domains that count as this company
+  domains         String[] @default([])
+  /// Microsoft 365 tenant. Null until "Connect Microsoft 365" (admin consent) records it.
+  azureTenantId   String?
+  consentGrantedAt DateTime?
   timezone        String   @default("Asia/Dubai")
   /// Working days, 0 = Sunday … 6 = Saturday. Default Sun–Thu.
   workDays        Int[]    @default([0, 1, 2, 3, 4])
@@ -81,6 +94,16 @@ model Organization {
   /// Branding for the dashboard
   logoUrl         String?
   primaryColor    String   @default("#BE272C")
+  secondaryColor  String   @default("#BE6B27")
+  /// Font keys understood by the web app (merriweather | playfair | inter; source-sans | inter | noto-sans)
+  headingFont     String   @default("merriweather")
+  bodyFont        String   @default("source-sans")
+  /// Company context injected into the AI summary system prompt
+  aiContext       String?
+  /// full = cleaned body text (encrypted when a key is set); preview_only = first ~500 chars only
+  bodyStorage     BodyStorage @default(full)
+  /// Rows older than this are purged from OUR database by the retention job (never from the mailbox)
+  retentionDays   Int      @default(365)
   /// Daily digest (sent in Phase 6): recipients and local send time
   digestRecipients String[] @default([])
   digestHour      Int      @default(8)
@@ -91,11 +114,11 @@ model Organization {
   settings        Json     @default("{}")
   createdAt       DateTime @default(now())
 
-  mailboxes Mailbox[]
-  users     AppUser[]
-  digests   DigestLog[]
-  aiUsage   AiUsage[]
-  auditLogs AuditLog[]
+  mailboxes   Mailbox[]
+  memberships Membership[]
+  digests     DigestLog[]
+  aiUsage     AiUsage[]
+  auditLogs   AuditLog[]
 }
 
 model Mailbox {
@@ -116,6 +139,8 @@ model Mailbox {
   /// Last sync failure message (cleared on the next successful sync)
   lastSyncError         String?
   lastSyncErrorAt       DateTime?
+  /// Set while a sync runs (webhook/cron); stale after 10 minutes
+  syncLockedAt          DateTime?
   createdAt             DateTime  @default(now())
 
   threads  Thread[]
@@ -252,16 +277,31 @@ model AiUsage {
 }
 
 model AppUser {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  name        String?
+  /// Owners see and manage every company (and the Companies page)
+  isOwner     Boolean  @default(false)
+  /// Deactivated users keep their row (audit history) but cannot sign in
+  isActive    Boolean  @default(true)
+  lastLoginAt DateTime?
+  createdAt   DateTime @default(now())
+
+  memberships Membership[]
+}
+
+/// A user's role in one company
+model Membership {
   id        String       @id @default(cuid())
+  userId    String
+  user      AppUser      @relation(fields: [userId], references: [id], onDelete: Cascade)
   orgId     String
   org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  email     String       @unique
-  name      String?
   role      UserRole     @default(viewer)
-  /// Deactivated users keep their row (audit history) but cannot sign in
-  isActive  Boolean      @default(true)
-  lastLoginAt DateTime?
   createdAt DateTime     @default(now())
+
+  @@unique([userId, orgId])
+  @@index([orgId])
 }
 
 /// Every dashboard action (who, what, when, before/after)
