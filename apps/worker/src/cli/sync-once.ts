@@ -1,6 +1,13 @@
 import { Command } from "commander";
 import { disconnectDb, getDb, hasAnthropicKey, summarizeThreads, syncMailbox } from "@email-tracker/core";
 
+/** Which database this run talks to, so "not found" / connection errors are easy to place. */
+function dbHint(): string {
+  let host = "unknown";
+  try { host = new URL(process.env.DATABASE_URL ?? "").hostname || "unknown"; } catch { /* keep unknown */ }
+  return `Database: ${host}${host === "localhost" ? " (your LOCAL database; for production run \`cp .env.production .env\` first)" : ""}.`;
+}
+
 const program = new Command()
   .name("sync-once")
   .description("Run one backfill/incremental sync for a mailbox (Inbox + Sent Items)")
@@ -10,11 +17,14 @@ const program = new Command()
   .option("--no-ai", "skip Claude summaries for the touched threads")
   .action(async (email: string, opts: { reset: boolean; days?: number; ai: boolean }) => {
     const db = getDb();
-    const targets =
-      email === "all"
-        ? await db.mailbox.findMany({ where: { isActive: true } })
-        : [await db.mailbox.findUniqueOrThrow({ where: { emailAddress: email.toLowerCase() } })];
-    if (!targets.length) return console.log("No active mailboxes. Use: pnpm mailbox add <email>");
+    const one = email === "all" ? null : await db.mailbox.findUnique({ where: { emailAddress: email.toLowerCase() } });
+    if (email !== "all" && !one) {
+      console.error(`No mailbox ${email} in this database. Add it first (Companies page → Add mailbox, or \`pnpm mailbox add ${email}\`).\n${dbHint()}`);
+      process.exitCode = 1;
+      return;
+    }
+    const targets = one ? [one] : await db.mailbox.findMany({ where: { isActive: true } });
+    if (!targets.length) return console.log(`No active mailboxes. Use: pnpm mailbox add <email>\n${dbHint()}`);
 
     for (const mb of targets) {
       const stats = await syncMailbox(mb.id, { reset: opts.reset, backfillDays: opts.days });
@@ -47,6 +57,7 @@ program
   .parseAsync(process.argv)
   .catch((err) => {
     console.error(err instanceof Error ? (process.env.LOG_LEVEL === "debug" ? err.stack : err.message) : err);
+    console.error(dbHint());
     process.exitCode = 1;
   })
   .finally(() => disconnectDb());
