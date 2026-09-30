@@ -25,7 +25,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
       <h1 className="text-2xl font-bold">Settings</h1>
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
-          <CardHeader><CardTitle>Mailboxes</CardTitle><CardDescription>Add a mailbox from the CLI: <code className="rounded bg-muted px-1">pnpm mailbox add user@{s.org.domain}</code></CardDescription></CardHeader>
+          <CardHeader><CardTitle>Mailboxes</CardTitle><CardDescription>Owners add mailboxes on the <a href="/companies" className="underline">Companies</a> page (or <code className="rounded bg-muted px-1">pnpm mailbox add user@{s.org.domain}</code>). The first sync loads recent history; run <code className="rounded bg-muted px-1">pnpm sync:once</code> from a laptop for a longer backfill.</CardDescription></CardHeader>
           <CardContent>
             <ul className="divide-y text-sm">
               {s.mailboxes.map((m) => (
