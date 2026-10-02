@@ -1,9 +1,10 @@
 import "server-only";
-import { getDb, mailboxScope, type Prisma, type SessionContext } from "@email-tracker/core";
+import { getDb, listVisibility, mailboxScope, type Prisma, type SessionContext } from "@email-tracker/core";
 import type { Filters } from "@/lib/filters";
+import { exclusionReasons } from "./exclusions";
 
 export function threadsWhere(ctx: SessionContext, f: Filters, now = new Date()): Prisma.ThreadWhereInput {
-  const where: Prisma.ThreadWhereInput = { ...mailboxScope(ctx, f.mailboxId), lastMessageAt: { gte: f.from, lte: f.to } };
+  const where: Prisma.ThreadWhereInput = { ...mailboxScope(ctx, f.mailboxId), lastMessageAt: { gte: f.from, lte: f.to }, AND: [listVisibility(f.showExcluded)] };
   if (f.category) where.category = f.category as Prisma.ThreadWhereInput["category"];
   if (f.priority) where.priority = f.priority as Prisma.ThreadWhereInput["priority"];
   switch (f.status) {
@@ -21,10 +22,10 @@ export function threadsWhere(ctx: SessionContext, f: Filters, now = new Date()):
 
 const select = {
   id: true, subject: true, status: true, overdueAt: true, awaitingSince: true, category: true, priority: true, summary: true, nextAction: true,
-  lastMessageAt: true, messageCount: true, participants: true, summaryError: true, summaryUpdatedAt: true, summaryMessageCount: true, needsReply: true,
+  lastMessageAt: true, messageCount: true, participants: true, summaryError: true, summaryUpdatedAt: true, summaryMessageCount: true, needsReply: true, exclusionAction: true,
   mailbox: { select: { emailAddress: true } },
 } satisfies Prisma.ThreadSelect;
-export type ThreadRow = Prisma.ThreadGetPayload<{ select: typeof select }>;
+export type ThreadRow = Prisma.ThreadGetPayload<{ select: typeof select }> & { excludedReason: string | null };
 
 export async function getThreadsPage(ctx: SessionContext, f: Filters, now = new Date()) {
   const db = getDb();
@@ -33,5 +34,10 @@ export async function getThreadsPage(ctx: SessionContext, f: Filters, now = new 
     db.thread.findMany({ where, orderBy: [{ lastMessageAt: "desc" }, { id: "asc" }], skip: (f.page - 1) * f.pageSize, take: f.pageSize, select }),
     db.thread.count({ where }),
   ]);
-  return { rows, total, pages: Math.max(1, Math.ceil(total / f.pageSize)) };
+  // Why each excluded thread on this page is excluded (taken from one of its excluded emails).
+  const excluded = rows.filter((t) => t.exclusionAction).map((t) => t.id);
+  const causes = excluded.length ? await db.message.findMany({ where: { threadId: { in: excluded }, excludedBy: { not: null } }, distinct: ["threadId"], select: { threadId: true, excludedBy: true } }) : [];
+  const reasons = await exclusionReasons(causes.map((c) => c.excludedBy));
+  const byThread = new Map(causes.map((c) => [c.threadId, reasons.get(c.excludedBy!) ?? null]));
+  return { rows: rows.map((t): ThreadRow => ({ ...t, excludedReason: byThread.get(t.id) ?? null })), total, pages: Math.max(1, Math.ceil(total / f.pageSize)) };
 }

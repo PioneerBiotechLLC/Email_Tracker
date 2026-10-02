@@ -1,5 +1,6 @@
 import "server-only";
 import { assertSameOrg, getDb, readBody, type SessionContext } from "@email-tracker/core";
+import { exclusionReasons } from "./exclusions";
 
 /** Thread + decrypted messages. Bodies only ever leave the server on this page. */
 export async function getThreadDetail(ctx: SessionContext, threadId: string) {
@@ -23,13 +24,14 @@ export async function getThreadDetail(ctx: SessionContext, threadId: string) {
       duplicates: { select: { threadId: true, mailbox: { select: { emailAddress: true } } } },
     },
   });
+  const reasons = await exclusionReasons(messages.map((m) => m.excludedBy));
   return {
     thread,
     messages: messages.map((m) => {
       let body: string | null = null;
       try { body = readBody(m); } catch { body = "(body cannot be decrypted with the current DATA_ENCRYPTION_KEY)"; }
       const { bodyText: _b, bodyEncrypted: _e, ...rest } = m;
-      return { ...rest, body: body ?? m.bodyPreview ?? "" };
+      return { ...rest, body: body ?? m.bodyPreview ?? "", excludedReason: m.excludedBy ? (reasons.get(m.excludedBy) ?? null) : null };
     }),
   };
 }

@@ -93,6 +93,7 @@ pnpm db:studio                               # browse the data
 - Requests **immutable ids** (`Prefer: IdType="ImmutableId"`) so moving a message between folders doesn't create a duplicate, and asks Outlook for **text bodies**.
 - Reads `PidTagLastVerbExecuted` (0x1081) / `PidTagLastVerbExecutionTime` (0x1082) via `$expand` on the delta call; if the tenant rejects that, falls back to `$batch` (20/request) lookups automatically.
 - Keeps `In-Reply-To` / `References`, flags auto-replies (`Auto-Submitted`, `X-Auto-Response-Suppress`, "Automatic reply:" subjects).
+- Applies the company's **exclusion rules** and built-in bulk-mail detection to every incoming message (§9).
 - Cleans bodies: HTML → text, strips quoted history (English/Arabic/Outlook header blocks) and signatures, caps at 8,000 chars.
 - Groups messages into `Thread` rows by `conversationId` per mailbox, with a `normalizedSubject` (RE/FW/رد prefixes and ticket tags removed) for the "By subject" view.
 - Honours `Retry-After` on 429/503 and backs off exponentially.
@@ -276,6 +277,62 @@ pnpm ai:period sales@api-pharma.net --period week            # one mailbox
 pnpm ai:period all --org api-pharma.net --period month       # all mailboxes of a company
 ```
 
+## 9. Excluding emails
+
+Some mail should never be counted: GoDaddy account-activity notices, newsletters, system alerts, bounces. Exclusion only affects this app — **nothing is ever moved, deleted or marked in Outlook**.
+
+**Two actions**
+
+| Action | Tracker / Threads | KPIs, awaiting, overdue, digests | Sent to the AI |
+|---|---|---|---|
+| `ignore` | hidden (listed with the **Show excluded** toggle) | not counted | never |
+| `no_reply_needed` | shown, with an "Excluded" badge and the reason | not counted | never |
+
+**Rules** (Settings → *Exclusion rules*, admins only; per company, optionally for one mailbox). Matching is case-insensitive.
+
+| Type | Example value | Matches |
+|---|---|---|
+| Sender domain | `godaddy.com` | `x@godaddy.com` and subdomains such as `x@email.godaddy.com` |
+| Sender address | `billing@godaddy.com`, or `postmaster@*` | that address; with `@*`, that mailbox name at any domain |
+| Subject contains | `account activity` | any subject containing the text |
+| Subject matches (regex) | `^\[alert\]\s+\d+` | a JavaScript regular expression, case-insensitive (first 500 characters of the subject) |
+
+Every rule can carry a second condition, "…and subject contains", ANDed with the first (e.g. domain `microsoft.com` **and** subject contains `Microsoft 365`). While you type, the form shows *"This rule matches N emails in the last 90 days"*. Rules are deactivated, never deleted, and every change is written to the audit log. A company's own domains cannot be excluded.
+
+**Built-in detection** (on by default, two switches in the same Settings card) marks bulk and automatic mail `no_reply_needed` — never `ignore`, so nothing is hidden silently:
+
+- headers: `List-Unsubscribe`, `List-Id`, `Precedence: bulk | list | junk`, `X-Auto-Response-Suppress` (`Auto-Submitted` mail was already treated as an auto-reply);
+- senders: `noreply@`, `no-reply@`, `donotreply@`, `notifications@`, `mailer-daemon@`, `postmaster@`;
+- Outlook's Focused Inbox: mail Outlook filed under **Other** (Graph `inferenceClassification`), its own switch.
+
+Each excluded email stores why (`Message.excludedBy`: a rule id, or `auto:list-unsubscribe`, `auto:noreply`, `auto:focused-other`, …) and the badge shows it. When several rules match, a mailbox's own rule wins, then `ignore` over `no_reply_needed`, then the oldest rule; rules win over built-in detection.
+
+**How it is applied**
+
+- During sync, before reply detection and before AI summarization — excluded mail costs no AI calls.
+- Per message, not per thread: a thread whose incoming emails are **all** excluded becomes `no_reply_needed` (hidden when all are `ignore`), gets the category *Notification* and is skipped by the AI. If a real person later replies inside such a thread, that email counts as usual.
+- Adding, editing, deactivating a rule or flipping a switch re-applies the rules to the company's stored emails (in chunks) and recomputes the affected threads. If a very large mailbox does not finish inside one request, the Settings message says so; finish with `pnpm rules:reapply`.
+- Quick actions for admins on tracker rows and on each email of a thread page: **Ignore this sender** / **Ignore this domain** create the rule, show how many emails were affected, and offer **Undo**.
+
+**Default rules** (seeded for new companies automatically; shown in Settings where you can edit or deactivate them):
+
+| Rule | Action |
+|---|---|
+| domain `godaddy.com` | ignore |
+| domain `secureserver.net` | ignore |
+| domain `microsoft.com` + subject contains `Microsoft 365` | no reply needed |
+| sender `mailer-daemon@*`, sender `postmaster@*` | ignore |
+
+After deploying this version run once:
+
+```bash
+pnpm db:deploy
+pnpm rules:seed-defaults            # adds the defaults to existing companies and re-applies all rules (idempotent)
+pnpm sync:once all --reset          # optional: re-reads the backfill window so OLD mail gets header signals and Outlook's Focused/Other flag
+```
+
+Header signals and the Focused/Other flag are recorded when a message is synced. Mail stored before this version has neither until a `--reset` sync re-reads it; sender- and subject-based rules and the `noreply@` detection work on old mail immediately. (Graph delta links remember the fields they were created with, so `--reset` is also what makes *new* mail carry the Focused/Other flag.)
+
 ## Commands
 
 | Command | What it does |
@@ -287,6 +344,8 @@ pnpm ai:period all --org api-pharma.net --period month       # all mailboxes of 
 | `pnpm sync:once <email\|all> [--reset] [--days N] [--no-ai]` | backfill / incremental sync, then AI summaries for touched threads |
 | `pnpm replies:recompute <email\|all> [--no-dedupe]` | re-link copies across mailboxes + internal recipients, then re-run reply detection + thread status for every thread |
 | `pnpm replies:report <email> [--days 30]` | reply stats + oldest unanswered emails, for spot-checking against Outlook |
+| `pnpm rules:seed-defaults [--org <slug>] [--no-apply]` | add the default exclusion rules to companies that lack them, then re-apply all rules |
+| `pnpm rules:reapply [--org <slug>]` | re-evaluate stored emails against the current exclusion rules and recompute the affected threads |
 | `pnpm ai:backfill <email\|all> [--limit N] [--dry-run]` | summarize unsummarized threads via the Batch API; dry-run prints the cost estimate |
 | `pnpm ai:summarize <email\|all> [--limit N]` | live summaries for threads with new messages |
 | `pnpm ai:summarize-thread <threadId> [--force]` | summarize one thread, print JSON |

@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { Download } from "lucide-react";
+import { domainOf, orgDomains } from "@email-tracker/core";
+import { ignoreSender } from "@/actions/rules";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/shared/empty-state";
-import { CategoryChip, PriorityChip, StatusBadge } from "@/components/shared/badges";
-import { FilterBar } from "@/components/shared/filter-bar";
+import { CategoryChip, ExcludedBadge, PriorityChip, StatusBadge } from "@/components/shared/badges";
+import { ExcludedToggle, FilterBar } from "@/components/shared/filter-bar";
+import { IgnoreMenu } from "@/components/shared/ignore-menu";
+import { RuleBanner } from "@/components/shared/rule-banner";
 import { Pagination, SortLink } from "@/components/shared/pagination";
 import { getTrackerPage } from "@/lib/data/tracker";
 import { parseFilters, withParams, type SearchParams } from "@/lib/filters";
@@ -14,6 +18,7 @@ import { getCompanyContext } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Inbox Tracker" };
+export const maxDuration = 60; // the quick "ignore" actions re-apply the rules to stored mail
 const STATUSES = [{ value: "replied", label: "Replied" }, { value: "waiting", label: "Waiting" }, { value: "overdue", label: "Overdue" }, { value: "no_reply_needed", label: "No reply needed" }];
 const METHOD: Record<string, string> = { outlook_verb: "verb", header_match: "header", conversation_match: "conversation" };
 
@@ -26,6 +31,10 @@ export default async function TrackerPage({ params, searchParams }: { params: Pr
   const now = new Date();
   const { rows, total, pages } = await getTrackerPage(ctx, f, now);
   const tz = org.timezone;
+  const isAdmin = ctx.role === "admin";
+  const ownDomains = orgDomains(org);
+  const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+  const returnTo = `${base}/tracker${withParams(sp, {})}`;
 
   return (
     <div className="space-y-4">
@@ -33,7 +42,8 @@ export default async function TrackerPage({ params, searchParams }: { params: Pr
         <h1 className="text-2xl font-bold">Inbox Tracker</h1>
         <Button asChild variant="outline" size="sm"><a href={`${base}/tracker/export` + withParams(sp, {})} download data-testid="export-csv"><Download className="size-4" /> Export CSV</a></Button>
       </div>
-      <FilterBar statuses={STATUSES} />
+      <FilterBar statuses={STATUSES} extra={<ExcludedToggle />} />
+      <RuleBanner orgId={org.id} rule={one(sp.rule)} affected={one(sp.affected)} returnTo={returnTo} />
       {rows.length === 0 ? (
         <EmptyState title="No emails in this range" hint="Try a wider date range or clear the filters." />
       ) : (
@@ -50,6 +60,7 @@ export default async function TrackerPage({ params, searchParams }: { params: Pr
                 <TableHead><SortLink col="repliedAt" label="Replied at" sp={sp} current={f.sort} dir={f.dir} /></TableHead>
                 <TableHead>Replied by</TableHead>
                 <TableHead className="text-right"><SortLink col="responseBusinessMinutes" label="Response time" sp={sp} current={f.sort} dir={f.dir} /></TableHead>
+                {isAdmin && <TableHead><span className="sr-only">Actions</span></TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -57,7 +68,10 @@ export default async function TrackerPage({ params, searchParams }: { params: Pr
                 <TableRow key={r.id} className={cn(r.status === "overdue" && "row-overdue")} data-status={r.status}>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(r.receivedAt, tz, now)}</TableCell>
                   <TableCell className="max-w-48 truncate" title={r.fromAddress}>{r.fromName ? <><span dir="auto">{r.fromName}</span><span className="block truncate text-xs text-muted-foreground">{r.fromAddress}</span></> : r.fromAddress}</TableCell>
-                  <TableCell className="max-w-md"><Link href={`${base}/threads/${r.threadId}`} className="line-clamp-2 hover:underline" dir="auto">{r.subject || "(no subject)"}</Link></TableCell>
+                  <TableCell className="max-w-md">
+                    <Link href={`${base}/threads/${r.threadId}`} className="line-clamp-2 hover:underline" dir="auto">{r.subject || "(no subject)"}</Link>
+                    {r.exclusionAction && <ExcludedBadge action={r.exclusionAction} reason={r.excludedReason} />}
+                  </TableCell>
                   <TableCell><CategoryChip category={r.thread.category} /></TableCell>
                   <TableCell><PriorityChip priority={r.thread.priority} /></TableCell>
                   <TableCell><StatusBadge status={r.status} /></TableCell>
@@ -69,6 +83,13 @@ export default async function TrackerPage({ params, searchParams }: { params: Pr
                     ) : "–"}
                     {r.replyMethod && <span className="block text-[11px] text-muted-foreground">{METHOD[r.replyMethod] ?? r.replyMethod}</span>}
                   </TableCell>
+                  {isAdmin && (
+                    <TableCell className="w-8 p-1">
+                      {r.exclusionAction !== "ignore" && domainOf(r.fromAddress) && !ownDomains.has(domainOf(r.fromAddress)) && (
+                        <IgnoreMenu address={r.fromAddress} domain={domainOf(r.fromAddress)} ignoreSender={ignoreSender.bind(null, org.id, r.id, "sender_email", returnTo)} ignoreDomain={ignoreSender.bind(null, org.id, r.id, "sender_domain", returnTo)} />
+                      )}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>

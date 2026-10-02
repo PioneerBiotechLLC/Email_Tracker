@@ -1,5 +1,5 @@
 import "server-only";
-import { bucketByDay, computeKpis, getDb, mailboxScope, slowestSenders, type SessionContext } from "@email-tracker/core";
+import { bucketByDay, computeKpis, COUNTED, getDb, mailboxScope, slowestSenders, type SessionContext } from "@email-tracker/core";
 import type { Filters } from "@/lib/filters";
 
 export async function getOverview(ctx: SessionContext, f: Filters, tz: string, now = new Date()) {
@@ -7,7 +7,8 @@ export async function getOverview(ctx: SessionContext, f: Filters, tz: string, n
   const scope = mailboxScope(ctx, f.mailboxId);
   const [rows, awaiting, overdue, byCategoryRaw, attention] = await Promise.all([
     db.message.findMany({
-      where: { ...scope, direction: "inbound", isAutoReply: false, receivedAt: { gte: f.from, lte: f.to } },
+      // Excluded mail (rules and auto-detected notifications) never counts toward the KPIs.
+      where: { ...scope, direction: "inbound", isAutoReply: false, ...COUNTED, receivedAt: { gte: f.from, lte: f.to } },
       select: { receivedAt: true, repliedAt: true, responseMinutes: true, responseBusinessMinutes: true, fromAddress: true },
     }),
     db.thread.count({ where: { ...scope, status: "awaiting_us" } }),

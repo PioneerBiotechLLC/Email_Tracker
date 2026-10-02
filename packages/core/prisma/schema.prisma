@@ -70,6 +70,21 @@ enum BodyStorage {
   preview_only
 }
 
+/// What an exclusion rule matches on
+enum ExclusionRuleType {
+  sender_email
+  sender_domain
+  subject_contains
+  subject_regex
+}
+
+/// ignore = stored but hidden everywhere by default; no_reply_needed = shown, never counted as awaiting/overdue.
+/// Neither is ever sent to the AI.
+enum ExclusionAction {
+  ignore
+  no_reply_needed
+}
+
 /// Window covered by an AI period summary (rolling: today / last 7 days / last 30 days)
 enum SummaryPeriod {
   day
@@ -127,6 +142,7 @@ model Organization {
   aiUsage     AiUsage[]
   auditLogs   AuditLog[]
   periodSummaries PeriodSummary[]
+  exclusionRules  ExclusionRule[]
 }
 
 model Mailbox {
@@ -154,6 +170,33 @@ model Mailbox {
   threads  Thread[]
   messages Message[]
   periodSummaries PeriodSummary[]
+  exclusionRules  ExclusionRule[]
+}
+
+/// Emails that should not be counted (account notifications, newsletters, system alerts).
+/// Rules are never hard-deleted: deactivate them so the audit trail stays complete.
+model ExclusionRule {
+  id                  String            @id @default(cuid())
+  orgId               String
+  org                 Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  /// null = every mailbox of the company
+  mailboxId           String?
+  mailbox             Mailbox?          @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  type                ExclusionRuleType
+  /// Address ("billing@godaddy.com", or "mailer-daemon@*" for any domain), domain, text or regular expression
+  value               String
+  /// Optional second condition, ANDed with the first: the subject must also contain this text
+  andSubjectContains  String?
+  action              ExclusionAction
+  note                String?
+  /// Set on the built-in default rules so `pnpm rules:seed-defaults` never re-creates one that was edited or deactivated
+  defaultKey          String?
+  createdBy           String
+  createdAt           DateTime          @default(now())
+  isActive            Boolean           @default(true)
+
+  @@unique([orgId, defaultKey])
+  @@index([orgId, isActive])
 }
 
 model Thread {
@@ -199,6 +242,9 @@ model Thread {
   duplicateOfId       String?
   duplicateOf         Thread?        @relation("DuplicateThread", fields: [duplicateOfId], references: [id], onDelete: SetNull)
   duplicates          Thread[]       @relation("DuplicateThread")
+  /// Set when EVERY inbound message of the thread is excluded: "ignore" when all of them are ignored, else
+  /// "no_reply_needed". Such threads are never summarized by the AI.
+  exclusionAction     ExclusionAction?
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
@@ -261,6 +307,13 @@ model Message {
   duplicateOfId           String?
   duplicateOf             Message?    @relation("DuplicateCopy", fields: [duplicateOfId], references: [id], onDelete: SetNull)
   duplicates              Message[]   @relation("DuplicateCopy")
+  /// Outlook Focused Inbox classification from Graph: "focused" | "other"
+  inferenceClassification String?
+  /// Bulk-mail header signals seen at sync time (headers themselves are not stored), e.g. "list-unsubscribe"
+  autoSignals             String[]    @default([])
+  /// Why this message is excluded: an ExclusionRule id, or "auto:<signal>" for built-in detection
+  excludedBy              String?
+  exclusionAction         ExclusionAction?
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
@@ -270,6 +323,7 @@ model Message {
   @@index([duplicateOfId])
   @@index([mailboxId, direction, repliedAt])
   @@index([mailboxId, direction, receivedAt])
+  @@index([excludedBy])
 }
 
 model DigestLog {

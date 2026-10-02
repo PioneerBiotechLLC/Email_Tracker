@@ -1,6 +1,7 @@
 import "server-only";
-import { getDb, inboundStatus, mailboxScope, type Prisma, type SessionContext } from "@email-tracker/core";
+import { getDb, inboundStatus, listVisibility, mailboxScope, type Prisma, type SessionContext } from "@email-tracker/core";
 import type { Filters } from "@/lib/filters";
+import { exclusionReasons } from "./exclusions";
 
 const SORTABLE: Record<string, (dir: "asc" | "desc") => Prisma.MessageOrderByWithRelationInput> = {
   receivedAt: (dir) => ({ receivedAt: dir }),
@@ -22,12 +23,15 @@ export function trackerWhere(ctx: SessionContext, f: Filters, now = new Date()):
     isAutoReply: false,
     receivedAt: { gte: f.from, lte: f.to },
   };
+  const and: Prisma.MessageWhereInput[] = [listVisibility(f.showExcluded)];
+  // An excluded email never waits for a reply, whatever the rest of its thread is doing.
   switch (f.status) {
     case "replied": where.repliedAt = { not: null }; break;
-    case "waiting": where.repliedAt = null; threadAnd.push({ status: "awaiting_us", OR: [{ overdueAt: null }, { overdueAt: { gt: now } }] }); break;
-    case "overdue": where.repliedAt = null; threadAnd.push({ status: "awaiting_us", overdueAt: { lte: now } }); break;
-    case "no_reply_needed": where.repliedAt = null; threadAnd.push({ status: { in: ["no_reply_needed", "closed", "awaiting_them"] } }); break;
+    case "waiting": where.repliedAt = null; where.exclusionAction = null; threadAnd.push({ status: "awaiting_us", OR: [{ overdueAt: null }, { overdueAt: { gt: now } }] }); break;
+    case "overdue": where.repliedAt = null; where.exclusionAction = null; threadAnd.push({ status: "awaiting_us", overdueAt: { lte: now } }); break;
+    case "no_reply_needed": where.repliedAt = null; and.push({ OR: [{ exclusionAction: { not: null } }, { thread: { status: { in: ["no_reply_needed", "closed", "awaiting_them"] } } }] }); break;
   }
+  where.AND = and;
   if (f.q) {
     where.OR = [
       { subject: { contains: f.q, mode: "insensitive" } },
@@ -42,19 +46,21 @@ export function trackerWhere(ctx: SessionContext, f: Filters, now = new Date()):
 
 const select = {
   id: true, receivedAt: true, fromAddress: true, fromName: true, subject: true, repliedAt: true, replyMethod: true,
-  responseMinutes: true, responseBusinessMinutes: true, threadId: true,
+  responseMinutes: true, responseBusinessMinutes: true, threadId: true, excludedBy: true, exclusionAction: true,
   thread: { select: { status: true, overdueAt: true, category: true, priority: true } },
   repliedBy: { select: { fromAddress: true } },
   mailbox: { select: { emailAddress: true } },
 } satisfies Prisma.MessageSelect;
 
-export type TrackerRow = Prisma.MessageGetPayload<{ select: typeof select }> & { status: ReturnType<typeof inboundStatus>; repliedByAddress: string | null };
+export type TrackerRow = Prisma.MessageGetPayload<{ select: typeof select }> & { status: ReturnType<typeof inboundStatus>; repliedByAddress: string | null; excludedReason: string | null };
 
-function decorate(rows: Prisma.MessageGetPayload<{ select: typeof select }>[], now: Date): TrackerRow[] {
+async function decorate(rows: Prisma.MessageGetPayload<{ select: typeof select }>[], now: Date): Promise<TrackerRow[]> {
+  const reasons = await exclusionReasons(rows.map((r) => r.excludedBy));
   return rows.map((r) => ({
     ...r,
-    status: inboundStatus(r, r.thread, now),
+    status: r.exclusionAction ? "no_reply_needed" : inboundStatus(r, r.thread, now),
     repliedByAddress: r.repliedAt ? (r.repliedBy?.fromAddress ?? r.mailbox.emailAddress) : null,
+    excludedReason: r.excludedBy ? (reasons.get(r.excludedBy) ?? null) : null,
   }));
 }
 
@@ -67,7 +73,7 @@ export async function getTrackerPage(ctx: SessionContext, f: Filters, now = new 
     db.message.findMany({ where, orderBy: [orderBy, { id: "asc" }], skip: (f.page - 1) * f.pageSize, take: f.pageSize, select }),
     db.message.count({ where }),
   ]);
-  return { rows: decorate(rows, now), total, pages: Math.max(1, Math.ceil(total / f.pageSize)) };
+  return { rows: await decorate(rows, now), total, pages: Math.max(1, Math.ceil(total / f.pageSize)) };
 }
 
 export const EXPORT_LIMIT = 10_000;

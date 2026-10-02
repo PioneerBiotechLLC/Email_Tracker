@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { GraphProvider, ensureSubscription, getDb, isValidSlug, logAudit, slugify } from "@email-tracker/core";
+import { GraphProvider, ensureSubscription, getDb, isValidSlug, logAudit, seedDefaultRules, slugify } from "@email-tracker/core";
 import { requireOwner } from "@/lib/session";
 import type { ActionResult } from "./settings";
 
@@ -58,6 +58,7 @@ export async function addCompany(_prev: ActionResult | null, formData: FormData)
   const clash = await db.organization.findFirst({ where: { OR: [{ slug: parsed.data.slug }, { domain: parsed.data.domain }] }, select: { id: true } });
   if (clash) return { ok: false, message: "A company with that slug or domain already exists." };
   const org = await db.organization.create({ data: { ...parsed.data, consentGrantedAt: parsed.data.azureTenantId ? new Date() : null } });
+  await seedDefaultRules(db, org.id);
   await logAudit(db, { orgId: org.id, userEmail: owner.email, action: "org.create", targetType: "organization", targetId: org.id, after: { slug: org.slug, domain: org.domain } });
   revalidatePath("/companies");
   return { ok: true, message: `${org.name} created at /c/${org.slug}. Next: Connect Microsoft 365, then add mailboxes.` };

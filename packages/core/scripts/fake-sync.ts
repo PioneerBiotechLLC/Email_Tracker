@@ -3,7 +3,7 @@
  * (no Graph credentials needed). Run against any Postgres:
  *   DATABASE_URL=... AZURE_TENANT_ID=t AZURE_CLIENT_ID=c AZURE_CLIENT_SECRET=s pnpm exec tsx scripts/fake-sync.ts
  */
-import { getDb, disconnectDb, syncMailbox, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, summarizePeriod, latestPeriodSummary, mailboxScope, SUMMARY_TOOL_NAME, PERIOD_SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
+import { getDb, disconnectDb, syncMailbox, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, summarizePeriod, latestPeriodSummary, mailboxScope, seedDefaultRules, reapplyExclusions, countRuleMatches, collectPeriodActivity, SUMMARY_TOOL_NAME, PERIOD_SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { MailProvider, RawMessage, ListChangesOptions, DeltaPage, ListChangesResult, SubscriptionInfo, MailUser } from "../src/mail/provider.js";
 
@@ -15,7 +15,7 @@ function msg(p: Partial<RawMessage> & { id: string; receivedAt: Date; subject: s
   return {
     changeKey: null, conversationId: "conv-1", internetMessageId: `<${p.id}@x>`, from: { address: "ali@customer.com", name: "Ali" },
     to: [{ address: OWNER, name: "Sales" }], cc: [], sentAt: p.receivedAt, bodyPreview: p.subject, body: { contentType: "text", content: "hello" },
-    hasAttachments: false, importance: "normal", isDraft: false, headers: null, lastVerb: null, lastVerbAt: null, ...p,
+    hasAttachments: false, importance: "normal", isDraft: false, headers: null, lastVerb: null, lastVerbAt: null, inferenceClassification: null, ...p,
   };
 }
 
@@ -62,7 +62,7 @@ function assert(cond: unknown, label: string) { if (!cond) throw new Error(`ASSE
 
 const db = getDb();
 try {
-  await db.organization.deleteMany({ where: { domain: "example-pharma.com" } });
+  await db.organization.deleteMany({ where: { domain: { in: ["example-pharma.com", "other-pharma.com"] } } });
   const org = await db.organization.create({ data: { name: "Example", slug: "example-pharma", domain: "example-pharma.com", azureTenantId: "t" } });
   const mb = await db.mailbox.create({ data: { orgId: org.id, emailAddress: OWNER, graphUserId: "u1" } });
   const provider = new FakeProvider();
@@ -230,7 +230,73 @@ try {
   const latest = await latestPeriodSummary(db, org.id, null, "month");
   assert(latest?.id === pAll.record?.id && (await db.periodSummary.count({ where: { orgId: org.id } })) === 2, "latest digest per scope/period retrievable");
 
-  await db.organization.deleteMany({ where: { domain: "example-pharma.com" } });
+  // Exclusion rules: default rules, built-in detection, mixed threads, AI skipped, re-apply, company isolation.
+  console.log("exclusion rules");
+  assert((await seedDefaultRules(db, org.id)) === 5 && (await seedDefaultRules(db, org.id)) === 0, "default rules seeded once (idempotent)");
+  const recent = (h: number) => new Date(Date.now() - h * 3_600_000);
+  const noisy: RawMessage[] = [
+    msg({ id: "x-gd", conversationId: "conv-gd", subject: "Your GoDaddy renewal receipt", receivedAt: recent(30), from: { address: "Billing@email.GoDaddy.com", name: "GoDaddy" } }),
+    msg({ id: "x-nl", conversationId: "conv-nl", subject: "October pricing bulletin", receivedAt: recent(29), from: { address: "news@vendor.com", name: "Vendor News" }, headers: [{ name: "List-Unsubscribe", value: "<mailto:unsub@vendor.com>" }] }),
+    msg({ id: "x-other", conversationId: "conv-other", subject: "Webinar invitation", receivedAt: recent(28), from: { address: "events@partner.com", name: "Partner" }, inferenceClassification: "other" }),
+    msg({ id: "x-mix1", conversationId: "conv-mix", subject: "Ticket 881 opened", receivedAt: recent(27), from: { address: "noreply@portal.com", name: "Portal" }, body: { contentType: "text", content: "PORTAL-NOISE ticket opened" } }),
+    msg({ id: "x-mix2", conversationId: "conv-mix", subject: "RE: Ticket 881 opened", receivedAt: recent(26), from: { address: "omar@customer.com", name: "Omar" }, body: { contentType: "text", content: "Can you call me about ticket 881?" } }),
+  ];
+  const receivedBefore = (await collectPeriodActivity(db, { orgId: org.id, mailboxId: null, from: recent(48), to: new Date() })).stats.received;
+  await syncMailbox(mb.id, { provider: new FakeProvider([...inbox, ...noisy], sent), reset: true });
+  const byGraphId = async (id: string) => db.message.findUniqueOrThrow({ where: { graphMessageId: id } });
+  const threadOf = async (conv: string) => db.thread.findUniqueOrThrow({ where: { mailboxId_conversationId: { mailboxId: mb.id, conversationId: conv } } });
+  const gdRule = await db.exclusionRule.findFirstOrThrow({ where: { orgId: org.id, defaultKey: "godaddy" } });
+  const gd = await byGraphId("x-gd");
+  assert(gd.exclusionAction === "ignore" && gd.excludedBy === gdRule.id, "godaddy.com rule matches email.godaddy.com (subdomain, case-insensitive) → ignore");
+  const tGd = await threadOf("conv-gd");
+  assert(tGd.exclusionAction === "ignore" && tGd.status === "no_reply_needed" && tGd.category === "notification", "thread of only ignored mail: hidden, no reply needed, category notification");
+  const nl = await byGraphId("x-nl");
+  assert(nl.exclusionAction === "no_reply_needed" && nl.excludedBy === "auto:list-unsubscribe" && nl.autoSignals[0] === "list-unsubscribe", "List-Unsubscribe header → auto no_reply_needed with the reason stored");
+  const other = await byGraphId("x-other");
+  assert(other.excludedBy === "auto:focused-other" && other.inferenceClassification === "other" && (await threadOf("conv-other")).status === "no_reply_needed", "Outlook \"Other\" → no_reply_needed");
+  const tMix = await threadOf("conv-mix");
+  assert((await byGraphId("x-mix1")).excludedBy === "auto:noreply" && (await byGraphId("x-mix2")).exclusionAction === null, "noreply sender excluded, the person replying in the same thread is not");
+  assert(tMix.exclusionAction === null && tMix.status === "awaiting_us" && tMix.awaitingSince?.getTime() === (await byGraphId("x-mix2")).receivedAt.getTime(), "mixed thread is not excluded and waits for our reply to the real person");
+  const aiBefore = aiCalls;
+  const skippedAi = await summarizeThread(tGd.id, { client: fakeAi(summaryInput), force: true });
+  assert(skippedAi.outcome === "skipped" && skippedAi.reason === "excluded" && aiCalls === aiBefore, "AI is not called for an excluded thread, even when forced");
+  const planEx = await planBackfill({ mailboxIds: [mb.id] });
+  const mixItem = planEx.items.find((i) => i.threadId === tMix.id);
+  assert(!planEx.items.some((i) => [tGd.id, nl.threadId, other.threadId].includes(i.threadId)), "excluded threads are not planned for summarization");
+  assert(!!mixItem && mixItem.request.user.includes("ticket 881?") && !mixItem.request.user.includes("PORTAL-NOISE"), "mixed thread: only the real message is sent to the AI");
+  const act = await collectPeriodActivity(db, { orgId: org.id, mailboxId: null, from: recent(48), to: new Date() });
+  assert(act.stats.received === receivedBefore + 1 && act.threads.every((t) => t.id !== tGd.id), `figures count only the real email (${act.stats.received} vs ${receivedBefore} before)`);
+
+  // Company isolation: the same mail in another company is untouched by this company's rules.
+  const orgB = await db.organization.create({ data: { name: "Other", slug: "other-pharma", domain: "other-pharma.com", azureTenantId: "t" } });
+  const mbB = await db.mailbox.create({ data: { orgId: orgB.id, emailAddress: "info@other-pharma.com", graphUserId: "u9" } });
+  await syncMailbox(mbB.id, { provider: new FakeProvider([msg({ id: "b-gd", conversationId: "conv-b", subject: "Your GoDaddy renewal receipt", receivedAt: recent(30), from: { address: "billing@email.godaddy.com", name: "GoDaddy" }, to: [{ address: "info@other-pharma.com" }] })], []) });
+  const bGd = await byGraphId("b-gd");
+  assert(bGd.exclusionAction === null && bGd.excludedBy === null, "company A's rules do not apply to company B's mail");
+  assert((await countRuleMatches(db, org.id, gdRule)) === 1 && (await countRuleMatches(db, orgB.id, gdRule)) === 1, "preview counts stay inside one company (1 match each, not 2)");
+
+  // Adding / deactivating a rule re-applies it to stored mail and recomputes the threads.
+  const omar = await db.exclusionRule.create({ data: { orgId: org.id, type: "sender_email", value: "omar@customer.com", action: "no_reply_needed", createdBy: "check" } });
+  const re1 = await reapplyExclusions(db, org.id);
+  const tMix2 = await threadOf("conv-mix");
+  assert(re1.changed === 1 && re1.threadsRecomputed === 1 && tMix2.exclusionAction === "no_reply_needed" && tMix2.status === "no_reply_needed" && tMix2.overdueAt === null, `new rule re-applied to stored mail (${re1.changed} changed) → thread no longer waits`);
+  assert((await reapplyExclusions(db, org.id)).changed === 0, "re-applying again changes nothing (idempotent)");
+  assert((await byGraphId("b-gd")).exclusionAction === null && (await db.message.count({ where: { mailbox: { orgId: orgB.id }, exclusionAction: { not: null } } })) === 0, "re-apply never touches another company");
+  await db.exclusionRule.update({ where: { id: omar.id }, data: { isActive: false } });
+  const re2 = await reapplyExclusions(db, org.id);
+  const tMix3 = await threadOf("conv-mix");
+  assert(re2.changed === 1 && tMix3.exclusionAction === null && tMix3.status === "awaiting_us" && tMix3.category === "other" && tMix3.summaryMessageCount === 0, "deactivating the rule restores the thread (awaiting our reply, back in the AI queue)");
+  // A mailbox-specific rule only applies to that mailbox.
+  const scoped = await db.exclusionRule.create({ data: { orgId: org.id, mailboxId: mb2.id, type: "subject_contains", value: "ticket 881", action: "ignore", createdBy: "check" } });
+  assert((await reapplyExclusions(db, org.id)).changed === 0 && (await countRuleMatches(db, org.id, scoped)) === 0, "a rule scoped to another mailbox does not match");
+  // Detection can be switched off per company; the stored signals bring it back when re-enabled.
+  await db.organization.update({ where: { id: org.id }, data: { settings: { autoExclude: false, outlookOtherNoReply: false } } });
+  const off = await reapplyExclusions(db, org.id);
+  assert(off.changed === 3 && (await byGraphId("x-nl")).exclusionAction === null && (await byGraphId("x-gd")).exclusionAction === "ignore", "auto-detection off: 3 auto-excluded emails count again, rules still apply");
+  await db.organization.update({ where: { id: org.id }, data: { settings: {} } });
+  assert((await reapplyExclusions(db, org.id)).changed === 3 && (await byGraphId("x-other")).excludedBy === "auto:focused-other", "auto-detection back on from the stored signals");
+
+  await db.organization.deleteMany({ where: { domain: { in: ["example-pharma.com", "other-pharma.com"] } } });
   console.log("\nALL CHECKS PASSED");
 } finally {
   await disconnectDb();

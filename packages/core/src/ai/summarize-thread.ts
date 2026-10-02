@@ -16,7 +16,7 @@ const log = createLogger("ai");
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested without a DB or the API)
 
-export type SkipReason = "nothing_new" | "debounce" | "cap_reached" | "duplicate" | "duplicate_copied";
+export type SkipReason = "nothing_new" | "debounce" | "cap_reached" | "duplicate" | "duplicate_copied" | "excluded";
 
 export interface SkipInput {
   messageCount: number;
@@ -149,7 +149,7 @@ type ThreadWithOrg = Prisma.ThreadGetPayload<{ include: typeof threadInclude }>;
 
 const messageSelect = {
   direction: true, fromAddress: true, fromName: true, toAddresses: true, ccAddresses: true,
-  receivedAt: true, sentAt: true, subject: true, bodyText: true, bodyEncrypted: true, bodyPreview: true, isAutoReply: true,
+  receivedAt: true, sentAt: true, subject: true, bodyText: true, bodyEncrypted: true, bodyPreview: true, isAutoReply: true, exclusionAction: true,
 } satisfies Prisma.MessageSelect;
 type DbMsg = Prisma.MessageGetPayload<{ select: typeof messageSelect }>;
 
@@ -179,7 +179,8 @@ export interface PreparedThread {
 export async function prepareThread(db: PrismaClient, thread: ThreadWithOrg): Promise<PreparedThread> {
   const env = getEnv();
   const rows = await db.message.findMany({ where: { threadId: thread.id }, orderBy: { receivedAt: "asc" }, select: messageSelect });
-  const messages = rows.map(toInputMessage);
+  // Excluded mail (notifications inside a real conversation) is never sent to the AI.
+  const messages = rows.filter((m) => !m.exclusionAction).map(toInputMessage);
   const tz = thread.mailbox.org.timezone;
   const input = buildThreadInput(messages, { timezone: tz });
   const lang: SummaryLanguage = thread.mailbox.org.summaryLanguage === "ar" ? "ar" : "en";
@@ -326,6 +327,8 @@ export async function summarizeThread(threadId: string, opts: SummarizeOptions =
     const copied = await propagateSummaryToDuplicates(db, thread.duplicateOfId, now, thread.id);
     return { threadId, outcome: "skipped", reason: copied ? "duplicate_copied" : "duplicate" };
   }
+  // Every inbound message is excluded (notifications, newsletters, ignored senders): no AI call, even when forced.
+  if (thread.exclusionAction) return { threadId, outcome: "skipped", reason: "excluded" };
 
   const callsToday = await countCallsToday(db, org.id, org.timezone, now);
   const skip = decideSkip({
@@ -384,6 +387,7 @@ export async function summarizeThreads(opts: SummarizeManyOptions = {}): Promise
   const where: Prisma.ThreadWhereInput = {
     ...(opts.mailboxId ? { mailboxId: opts.mailboxId } : { mailbox: { isActive: true, ...(opts.orgId ? { orgId: opts.orgId } : {}) } }),
     ...(opts.conversationIds ? { conversationId: { in: opts.conversationIds } } : {}),
+    exclusionAction: null,
   };
   // Prisma can't compare two columns; filter messageCount > summaryMessageCount in JS.
   const rows = await db.thread.findMany({ where, select: { id: true, messageCount: true, summaryMessageCount: true }, orderBy: { lastMessageAt: "asc" } });

@@ -14,8 +14,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   const rows = await getTrackerExport(ctx, f, now);
   const tz = org.timezone;
   const csv = toCsv(
-    ["Received", "From", "From name", "Subject", "Category", "Priority", "Status", "Replied at", "Replied by", "Response time (business min)", "Response time (raw min)", "Method", "Mailbox", "Thread"],
-    rows.map((r) => [formatDateTime(r.receivedAt, tz, now), r.fromAddress, r.fromName, r.subject, r.thread.category, r.thread.priority, STATUS_LABEL[r.status] ?? r.status, r.repliedAt ? formatDateTime(r.repliedAt, tz, now) : "", r.repliedByAddress, r.responseBusinessMinutes, r.responseMinutes, r.replyMethod, r.mailbox.emailAddress, r.threadId]),
+    ["Received", "From", "From name", "Subject", "Category", "Priority", "Status", "Replied at", "Replied by", "Response time (business min)", "Response time (raw min)", "Method", "Mailbox", "Thread", "Excluded"],
+    rows.map((r) => [formatDateTime(r.receivedAt, tz, now), r.fromAddress, r.fromName, r.subject, r.thread.category, r.thread.priority, STATUS_LABEL[r.status] ?? r.status, r.repliedAt ? formatDateTime(r.repliedAt, tz, now) : "", r.repliedByAddress, r.responseBusinessMinutes, r.responseMinutes, r.replyMethod, r.mailbox.emailAddress, r.threadId, r.exclusionAction ? (r.excludedReason ?? r.exclusionAction) : ""]),
   );
   return new NextResponse(csv, {
     headers: {

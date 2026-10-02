@@ -80,6 +80,47 @@ test("summary page shows period figures and the generate button; copies are hidd
   await expect(page.getByText("also received by")).toBeVisible();
 });
 
+test("exclusion rules: ignored mail is hidden, excluded mail is badged, settings list the rules with a live preview", async ({ page }) => {
+  // GoDaddy mail is ignored by a default rule: not listed unless "Show excluded" is on.
+  await page.goto(`${C}/tracker?range=90d&q=GoDaddy`);
+  await expect(page.locator("tbody tr")).toHaveCount(0);
+  await page.getByLabel("Show excluded").click(); // the box follows the URL, so it flips after the navigation
+  await expect(page).toHaveURL(/excluded=1/);
+  await expect(page.getByLabel("Show excluded")).toBeChecked();
+  const ignored = page.locator("tbody tr").filter({ hasText: "GoDaddy account activity" });
+  await expect(ignored).toHaveAttribute("data-status", "no_reply_needed");
+  await expect(ignored.getByTestId("excluded-badge")).toContainText("Ignored · rule: domain godaddy.com");
+  // "no reply needed" mail stays visible, with the reason, and never waits for a reply.
+  await page.goto(`${C}/tracker?range=90d&q=Microsoft+365`);
+  const soft = page.locator("tbody tr").filter({ hasText: "Your Microsoft 365 invoice is ready" });
+  await expect(soft).toHaveAttribute("data-status", "no_reply_needed");
+  await expect(soft.getByTestId("excluded-badge")).toContainText('subject contains "Microsoft 365"');
+  await page.goto(`${C}/threads?range=90d&q=Weekly+market+update`);
+  await expect(page.getByTestId("excluded-badge")).toContainText("auto: mailing list");
+  // Settings: the default rules are listed and a draft rule shows how many emails it would match.
+  await page.goto(`${C}/settings`);
+  const rules = page.getByTestId("exclusion-rules");
+  await expect(rules.getByText("godaddy.com", { exact: true })).toBeVisible();
+  await expect(rules.getByText("mailer-daemon@*")).toBeVisible();
+  const add = page.locator("form").filter({ has: page.getByRole("button", { name: "Add rule" }) });
+  await add.getByLabel("Value").fill("mohap.gov.ae");
+  await expect(page.getByTestId("rule-preview")).toContainText(/This rule matches [1-9]\d* emails? in the last 90 days/);
+});
+
+test("quick action: ignore a sender from the tracker, then undo", async ({ page }) => {
+  page.on("dialog", (d) => void d.accept());
+  await page.goto(`${C}/tracker?range=90d&q=INV-2188`);
+  const row = page.locator("tbody tr").filter({ hasText: "Payment reminder" });
+  await expect(row).toHaveCount(1);
+  await row.getByRole("button", { name: /Ignore options for accounts@sunpharma-intl.com/ }).click();
+  await page.getByRole("menuitem", { name: /Ignore this sender/ }).click();
+  await expect(page.getByTestId("rule-banner")).toContainText("1 email affected");
+  await expect(page.locator("tbody tr")).toHaveCount(0); // hidden now
+  await page.getByTestId("rule-banner").getByRole("button", { name: "Undo" }).click();
+  await expect(page.locator("tbody tr").filter({ hasText: "Payment reminder" })).toHaveCount(1);
+  await expect(page.getByTestId("rule-banner")).toHaveCount(0);
+});
+
 test("company switcher lists the user's companies and Companies is owner-only", async ({ page }) => {
   await page.goto(C);
   await page.getByRole("button", { name: "Switch company" }).click();

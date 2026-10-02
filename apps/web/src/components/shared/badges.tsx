@@ -20,3 +20,12 @@ export function PriorityChip({ priority }: { priority: string }) {
   const cls = priority === "urgent" ? "text-status-bad border-status-bad/40" : priority === "high" ? "text-status-warn border-status-warn/50" : "text-muted-foreground";
   return <span className={cn("inline-flex whitespace-nowrap rounded border px-1.5 py-0.5 text-xs font-medium", cls)}>{titleCase(priority)}</span>;
 }
+
+/** Marks an email or thread excluded by a rule or by auto-detection, with the reason (also as a tooltip). */
+export function ExcludedBadge({ action, reason }: { action: string; reason?: string | null }) {
+  return (
+    <span className="inline-flex max-w-64 items-center truncate whitespace-nowrap rounded border border-dashed px-1.5 py-0.5 text-[11px] text-muted-foreground" title={reason ?? undefined} data-testid="excluded-badge">
+      {action === "ignore" ? "Ignored" : "Excluded"}{reason ? ` · ${reason}` : ""}
+    </span>
+  );
+}

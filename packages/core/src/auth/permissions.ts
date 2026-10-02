@@ -20,11 +20,12 @@ export type Action =
   | "settings.edit"
   | "users.manage"
   | "mailbox.toggle"
+  | "rules.manage"
   /** Generate a daily/weekly/monthly AI digest (any member; costs one AI call) */
   | "summary.generate";
 
 const ADMIN_ONLY: ReadonlySet<Action> = new Set<Action>([
-  "thread.close", "thread.reopen", "thread.needsReply", "thread.resummarize", "thread.classify", "settings.edit", "users.manage", "mailbox.toggle",
+  "thread.close", "thread.reopen", "thread.needsReply", "thread.resummarize", "thread.classify", "settings.edit", "users.manage", "mailbox.toggle", "rules.manage",
 ]);
 
 export class ForbiddenError extends Error {

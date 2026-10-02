@@ -27,6 +27,8 @@ export interface RawMessage {
   /** PidTagLastVerbExecuted (102 reply, 103 reply-all, 104 forward) */
   lastVerb: number | null;
   lastVerbAt: Date | null;
+  /** Outlook Focused Inbox classification ("focused" | "other") when the provider has one */
+  inferenceClassification: string | null;
 }
 
 export type SyncFolder = "inbox" | "sentitems";

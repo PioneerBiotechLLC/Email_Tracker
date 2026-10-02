@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "../db.js";
 import { getEnv } from "../env.js";
 import { normalizeSubject } from "../mail/subject.js";
 import { DEFAULT_BUSINESS_HOURS, type BusinessHours } from "./business-hours.js";
+import { threadExclusion, type ExclusionAction } from "./exclusions.js";
 import { computeThreadStatus, detectReplies, type ReplyInputMessage, type ReplyResult } from "./replies.js";
 
 export interface Participant {
@@ -56,6 +57,7 @@ const messageSelect = {
   responseMinutes: true,
   responseBusinessMinutes: true,
   duplicateOfId: true,
+  exclusionAction: true,
 } satisfies Prisma.MessageSelect;
 
 type DbMessage = Prisma.MessageGetPayload<{ select: typeof messageSelect }>;
@@ -72,7 +74,8 @@ function toReplyInput(m: DbMessage): ReplyInputMessage {
     references: m.references,
     receivedAt: m.receivedAt,
     sentAt: m.sentAt,
-    isAutoReply: m.isAutoReply,
+    // Excluded mail is treated like an automatic message: nobody owes it a reply and it never reopens a thread.
+    isAutoReply: m.isAutoReply || m.exclusionAction != null,
     lastVerb: m.lastVerb,
     lastVerbAt: m.lastVerbAt,
   };
@@ -94,6 +97,8 @@ export interface RecomputeResult {
   messagesUpdated: number;
   /** id of the primary thread when this one is a copy (every message is a copy of that thread's messages) */
   duplicateOfId: string | null;
+  /** set when every real inbound message of the thread is excluded by a rule or by auto-detection */
+  exclusionAction: ExclusionAction | null;
 }
 
 /**
@@ -196,12 +201,15 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
   const siblings = await siblingOutbound(db, thread.mailbox.orgId, mailboxId, conversationId, messages.map((m) => m.internetMessageId).filter((id): id is string => !!id));
   const replies = detectReplies(inputs, { owners, businessHours, extraOutbound: siblings.map(toReplyInput) });
   const duplicateOfId = duplicateThreadOf(thread.id, messages, primaries);
-  const status = computeThreadStatus(
+  const exclusionAction = threadExclusion(messages.filter((m) => m.direction === "inbound" && !m.isAutoReply).map((m) => m.exclusionAction));
+  const computed = computeThreadStatus(
     inputs,
     replies,
     { status: thread.status, needsReply: thread.needsReply, needsReplyDecidedAt: thread.needsReplyDecidedAt, closedAt: thread.closedAt },
     { owners, businessHours, slaHours },
   );
+  // A thread made only of excluded mail never waits for anyone, whatever we sent into it.
+  const status = exclusionAction && computed.status !== "closed" ? { ...computed, status: "no_reply_needed" as const, awaitingSince: null, overdueAt: null } : computed;
 
   const updates: Prisma.PrismaPromise<unknown>[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -236,6 +244,9 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
         awaitingSince: status.awaitingSince,
         overdueAt: status.overdueAt,
         duplicateOfId,
+        exclusionAction,
+        // Excluded threads are notifications. When a rule is removed the thread goes back to the AI for a real category.
+        ...(thread.categoryManual ? {} : exclusionAction ? { category: "notification" as const } : thread.exclusionAction ? { category: "other" as const, summaryMessageCount: 0 } : {}),
         // A reopened thread is no longer closed.
         ...(thread.status === "closed" && status.status !== "closed" ? { closedAt: null, closedBy: null } : {}),
         // A newer inbound message invalidates the previous needsReply decision (user or AI) until the AI re-summarizes.
@@ -244,7 +255,7 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
     }),
   );
   await db.$transaction(updates);
-  return { threadId: thread.id, status: status.status, messagesUpdated: updates.length - 1, duplicateOfId };
+  return { threadId: thread.id, status: status.status, messagesUpdated: updates.length - 1, duplicateOfId, exclusionAction };
 }
 
 /**

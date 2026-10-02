@@ -4,7 +4,7 @@
  *   pnpm db:seed-demo            create / refresh
  *   pnpm db:seed-demo --remove   delete the demo org and everything under it
  */
-import { getDb, disconnectDb, protectBody, recomputeThread, recomputeMailboxThreads, dedupeOrgMessages, normalizeSubject } from "../src/index.js";
+import { getDb, disconnectDb, protectBody, recomputeThread, recomputeMailboxThreads, dedupeOrgMessages, normalizeSubject, reapplyExclusions, seedDefaultRules } from "../src/index.js";
 
 const DOMAIN = "demo-pharma.example";
 const MAILBOXES = ["sales@demo-pharma.example", "regulatory@demo-pharma.example"];
@@ -40,6 +40,8 @@ interface Scenario {
   autoReplyLast?: boolean;
   /** the other demo mailbox was Cc'd: it holds copies of every message (same Message-ID) */
   ccOtherMailbox?: boolean;
+  /** bulk-mail header signals the sync would have recorded (e.g. "list-unsubscribe") */
+  autoSignals?: string[];
 }
 
 const customers = [
@@ -87,7 +89,7 @@ const scenarios: Scenario[] = [
     keyPoints: ["INV-2188 USD 48,300 due 15 Sep", "Unpaid"], asks: [{ from: "Sun Pharma Accounts", ask: "Pay or send remittance advice", due: null }], nextAction: "Ask finance for the payment status and reply with the remittance advice", needsReply: true },
   { subject: "Weekly market update – MENA pharma pricing", category: "newsletter", priority: "low", from: { address: "news@pharmaintel.com", name: "PharmaIntel" }, lang: "en", lastHoursAgo: 20,
     messages: ["This week: SFDA price reference updates, new tender calendar for Egypt UPA, and cold-chain regulation changes in KSA. Read more on our site."],
-    summary: "Newsletter with MENA pharma pricing and tender news. Informational only.", keyPoints: [], asks: [], nextAction: null, needsReply: false, forceStatus: "no_reply_needed" },
+    summary: "Newsletter with MENA pharma pricing and tender news. Informational only.", keyPoints: [], asks: [], nextAction: null, needsReply: false, forceStatus: "no_reply_needed", autoSignals: ["list-unsubscribe"] },
   { subject: "Your Microsoft 365 invoice is ready", category: "notification", priority: "low", from: { address: "billing@microsoft.com", name: "Microsoft Billing" }, lang: "en", lastHoursAgo: 40,
     messages: ["Your invoice for September is available in the admin center. No action is required."],
     summary: "Automatic billing notification from Microsoft. No action needed.", keyPoints: [], asks: [], nextAction: null, needsReply: false, forceStatus: "no_reply_needed" },
@@ -164,6 +166,10 @@ for (let i = 0; i < extraSubjects.length; i++) {
   });
 }
 
+// Excluded by the default rules (godaddy.com → ignore): hidden unless "Show excluded" is on.
+scenarios.push({ subject: "Your GoDaddy account activity – domain renewal receipt", category: "notification", priority: "low", from: { address: "donotreply@email.godaddy.com", name: "GoDaddy" }, lang: "en", lastHoursAgo: 26, summaryState: "pending",
+  messages: ["Thanks for your order. Your domain demo-pharma.example was renewed for 1 year. Order number 2891004417."] });
+
 async function remove() {
   const db = getDb();
   const r = await db.organization.deleteMany({ where: { domain: DOMAIN } });
@@ -210,7 +216,7 @@ async function seed() {
           toAddresses: ours ? [{ address: sc.from.address, name: sc.from.name }] : [{ address: mb.emailAddress, name: mb.displayName }],
           ccAddresses: cc,
           subject: k === 0 ? sc.subject : `RE: ${sc.subject}`, receivedAt: at, sentAt: at, bodyPreview: text.slice(0, 120),
-          bodyText: stored.bodyText, bodyEncrypted: stored.bodyEncrypted, isAutoReply: isAuto,
+          bodyText: stored.bodyText, bodyEncrypted: stored.bodyEncrypted, isAutoReply: isAuto, autoSignals: ours ? [] : (sc.autoSignals ?? []),
           // some inbound messages carry the Outlook reply verb instead of a matched sent copy
           ...(!ours && k + 1 < count && sc.messages[k + 1]!.startsWith("OUT:") && rnd() > 0.5 ? { lastVerb: 102, lastVerbAt: hoursAgo(sc.lastHoursAgo + (count - 2 - k) * gap) } : {}),
         },
@@ -246,13 +252,16 @@ async function seed() {
   // Link the Cc'd copies to their primaries, compute in-company recipients, and settle every thread.
   const dedupe = await dedupeOrgMessages(db, org.id);
   for (const mb of mbs) await recomputeMailboxThreads(db, mb.id);
+  // Default exclusion rules + built-in detection, applied the way a rule change applies them to stored mail.
+  await seedDefaultRules(db, org.id);
+  const excluded = await reapplyExclusions(db, org.id);
   // A little AI usage history for the settings page
   const usage = [];
   for (let d = 0; d < 14; d++) for (let c = 0; c < 3 + Math.floor(rnd() * 6); c++) usage.push({ orgId: org.id, model: rnd() > 0.3 ? "claude-sonnet-5-5" : "claude-haiku-4-5", inputTokens: 900 + Math.floor(rnd() * 2000), outputTokens: 250 + Math.floor(rnd() * 300), cacheReadTokens: 900, cacheWriteTokens: 0, costUsd: 0.004 + rnd() * 0.006, batch: rnd() > 0.5, createdAt: hoursAgo(d * 24 + rnd() * 20) });
   await db.aiUsage.createMany({ data: usage });
 
   const counts = await db.thread.groupBy({ by: ["status"], where: { mailbox: { orgId: org.id } }, _count: true });
-  console.log(`Seeded demo organization "${org.name}" (${DOMAIN}) with ${scenarios.length} threads (${dedupe.duplicates} emails are copies held by the Cc'd mailbox):`);
+  console.log(`Seeded demo organization "${org.name}" (${DOMAIN}) with ${scenarios.length} threads (${dedupe.duplicates} emails are copies held by the Cc'd mailbox, ${excluded.changed} are excluded by rules or auto-detection):`);
   for (const c of counts) console.log(`  ${c.status.padEnd(16)} ${c._count}`);
   console.log(`Dashboard users: ${ADMIN} (admin), ${VIEWER} (viewer). Remove everything with: pnpm db:seed-demo --remove`);
 }

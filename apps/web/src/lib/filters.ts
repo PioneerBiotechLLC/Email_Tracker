@@ -20,6 +20,8 @@ export interface Filters {
   pageSize: number;
   sort: string;
   dir: "asc" | "desc";
+  /** list emails / threads excluded with the "ignore" action too (?excluded=1) */
+  showExcluded: boolean;
 }
 
 const one = (sp: SearchParams, k: string): string | undefined => {
@@ -74,5 +76,6 @@ export function parseFilters(sp: SearchParams, tz: string, now = new Date()): Fi
     pageSize,
     sort: one(sp, "sort") ?? "receivedAt",
     dir: dirRaw === "asc" ? "asc" : "desc",
+    showExcluded: one(sp, "excluded") === "1",
   };
 }

@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { GraphProvider, disconnectDb, ensureSubscription, getDb, getEnv, slugify } from "@email-tracker/core";
+import { GraphProvider, disconnectDb, ensureSubscription, getDb, getEnv, seedDefaultRules, slugify } from "@email-tracker/core";
 
 const program = new Command().name("mailbox").description("Register and manage tracked mailboxes");
 
@@ -24,6 +24,7 @@ program
       org = await db.organization.create({
         data: { name: opts.orgName ?? domain, slug: slugify(opts.orgName ?? domain.split(".")[0]!), domain, azureTenantId: tenantId, consentGrantedAt: tenantId ? new Date() : null, timezone: opts.timezone },
       });
+      await seedDefaultRules(db, org.id);
     } else if (!org.azureTenantId && tenantId) {
       org = await db.organization.update({ where: { id: org.id }, data: { azureTenantId: tenantId, consentGrantedAt: new Date() } });
     }

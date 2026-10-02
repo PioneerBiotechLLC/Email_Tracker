@@ -7,6 +7,20 @@ import { CATEGORY_LABEL } from "@/lib/format";
 const CATEGORIES = Object.keys(CATEGORY_LABEL);
 const PRIORITIES = ["low", "normal", "high", "urgent"];
 
+/** "Show excluded": also lists mail hidden by an "ignore" rule, so it can still be reviewed. */
+export function ExcludedToggle() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
+  const on = sp.get("excluded") === "1";
+  return (
+    <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      <input type="checkbox" checked={on} onChange={() => router.push(pathname + withParams(sp, { excluded: on ? null : "1", page: null }))} />
+      Show excluded
+    </label>
+  );
+}
+
 export function FilterBar({ statuses, searchPlaceholder = "Search subject, sender, summary…", extra }: { statuses: { value: string; label: string }[]; searchPlaceholder?: string; extra?: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();

@@ -6,7 +6,7 @@
  * Tenant IDs are recorded by "Connect Microsoft 365" (admin consent) in the dashboard,
  * or pass --tenant <id> to set one here.
  */
-import { getDb, disconnectDb } from "../src/index.js";
+import { getDb, disconnectDb, seedDefaultRules } from "../src/index.js";
 
 interface CompanySeed {
   slug: string; name: string; domain: string; domains: string[]; timezone: string; workDays: number[]; workStart: string; workEnd: string;
@@ -41,6 +41,7 @@ try {
     const org = existing
       ? await db.organization.update({ where: { id: existing.id }, data: { ...data, slug: existing.slug } })
       : await db.organization.create({ data });
+    await seedDefaultRules(db, org.id);
     console.log(`${existing ? "Updated" : "Created"} ${org.name} (/c/${org.slug}, ${org.domain}) tenant=${org.azureTenantId ?? "not connected yet"}`);
   }
 } finally {

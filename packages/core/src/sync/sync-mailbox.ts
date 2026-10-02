@@ -8,6 +8,8 @@ import type { MailProvider, RawMessage, SyncFolder } from "../mail/provider.js";
 import { normalizeSubject } from "../mail/subject.js";
 import { cleanBody } from "../mail/text.js";
 import { dedupeMessageIds, internalRecipients, orgDomains, threadRefKey, type ThreadRef } from "./dedupe.js";
+import { loadExclusionContext, type ExclusionContext } from "./exclusion-rules.js";
+import { evaluateExclusion, headerSignals } from "./exclusions.js";
 import { ownerAddresses, recomputeSiblingThreads, recomputeThread } from "./threads.js";
 
 const log = createLogger("sync");
@@ -44,6 +46,8 @@ interface UpsertContext {
   /** the company's email domains, for internal-recipient detection */
   domains: Set<string>;
   previewOnly: boolean;
+  /** the company's exclusion rules and detection settings, loaded once per sync */
+  exclusions: ExclusionContext;
 }
 
 /** Upserts one Graph message (and its thread shell). Returns the conversation id and Message-ID touched. */
@@ -58,6 +62,12 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
   // "preview only" storage keeps the DB small: no body text, the 500-char preview only.
   const stored = previewOnly ? { bodyText: null, bodyEncrypted: false } : protectBody(body);
   const orderAt = direction === "outbound" && raw.sentAt ? raw.sentAt : raw.receivedAt;
+  // Exclusion rules run here, before reply detection and the AI ever see the message. Only incoming mail is excluded.
+  const autoSignals = headerSignals(raw.headers);
+  const exclusion =
+    direction === "inbound"
+      ? evaluateExclusion({ mailboxId: mailbox.id, fromAddress, subject: raw.subject, autoSignals, inferenceClassification: raw.inferenceClassification }, ctx.exclusions.rules, ctx.exclusions.settings)
+      : { excludedBy: null, exclusionAction: null };
 
   const thread = await db.thread.upsert({
     where: { mailboxId_conversationId: { mailboxId: mailbox.id, conversationId } },
@@ -101,6 +111,9 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
     lastVerbAt: raw.lastVerbAt,
     // Colleagues (addresses in the company's domains) who also got this email
     internalRecipients: internalRecipients({ to: raw.to, cc: raw.cc }, ctx.domains, owners),
+    inferenceClassification: raw.inferenceClassification,
+    autoSignals,
+    ...exclusion,
   };
 
   await db.message.upsert({
@@ -152,7 +165,7 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
     partial: false,
     durationMs: 0,
   };
-  const ctx: UpsertContext = { owners, domains: orgDomains(mailbox.org), previewOnly: mailbox.org.bodyStorage === "preview_only" };
+  const ctx: UpsertContext = { owners, domains: orgDomains(mailbox.org), previewOnly: mailbox.org.bodyStorage === "preview_only", exclusions: await loadExclusionContext(db, mailbox.orgId) };
 
   for (const folder of FOLDERS) {
     if (stats.partial) break;

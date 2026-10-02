@@ -1,14 +1,18 @@
+import { previewExclusionRule, saveExclusionRule, setRuleActive, updateExclusionSettings } from "@/actions/rules";
 import { toggleMailbox, updateBranding, updateBusinessHours, updateDigest, updateStorage } from "@/actions/settings";
 import { BODY_FONTS, HEADING_FONTS } from "@/lib/fonts";
 import { addUser, removeUser, setUserRole } from "@/actions/users";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmForm } from "@/components/shared/confirm-form";
 import { SettingsForm, field } from "@/components/settings/forms";
+import { RuleForm } from "@/components/settings/rule-form";
 import { getSettings } from "@/lib/data/settings";
 import { formatDateTime, formatUsd } from "@/lib/format";
 import { requireAdminPage } from "@/lib/session";
 
 export const metadata = { title: "Settings" };
+export const maxDuration = 60; // saving business hours or exclusion rules recomputes stored threads
+const RULE_TYPE_LABEL: Record<string, string> = { sender_email: "Sender", sender_domain: "Domain", subject_contains: "Subject contains", subject_regex: "Subject matches" };
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default async function SettingsPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -19,6 +23,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
   const tz = s.org.timezone;
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
+  const ruleMailboxes = s.mailboxes.map((m) => ({ id: m.id, emailAddress: m.emailAddress }));
 
   return (
     <div className="space-y-6">
@@ -110,6 +115,52 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
               <UsageTable rows={[...s.usage.byDay].reverse()} />
             </div>
             <p className="text-sm md:col-span-2">Total: <strong>{s.usage.total.calls}</strong> calls ({s.usage.total.errors} errors), {s.usage.total.inputTokens.toLocaleString("en-US")} input / {s.usage.total.outputTokens.toLocaleString("en-US")} output tokens, <strong>{formatUsd(s.usage.total.costUsd)}</strong></p>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2" id="exclusion-rules">
+          <CardHeader><CardTitle>Exclusion rules</CardTitle><CardDescription>Emails that should not be counted: account notifications, newsletters, system alerts. <strong>Ignore</strong> hides the email everywhere (still listed with &quot;Show excluded&quot;); <strong>No reply needed</strong> keeps it visible but never counts it as awaiting a reply or overdue. Neither is sent to the AI. Rules only affect this app — nothing is moved or deleted in Outlook. Saving re-applies the rules to the emails already stored.</CardDescription></CardHeader>
+          <CardContent className="space-y-5">
+            <SettingsForm action={updateExclusionSettings.bind(null, orgId)}>
+              <label className="flex items-center gap-2"><input type="checkbox" name="autoExclude" defaultChecked={s.exclusions.settings.autoExclude} /> Detect bulk and automatic mail (List-Unsubscribe / List-Id / Precedence headers, noreply and notification senders) and mark it &quot;no reply needed&quot;</label>
+              <label className="flex items-center gap-2"><input type="checkbox" name="outlookOtherNoReply" defaultChecked={s.exclusions.settings.outlookOtherNoReply} /> Treat mail that Outlook files under &quot;Other&quot; (Focused Inbox) as &quot;no reply needed&quot;</label>
+            </SettingsForm>
+            {s.exclusions.auto.length > 0 && <p className="text-sm text-muted-foreground">Detected automatically: {s.exclusions.auto.map((a) => `${a.count.toLocaleString("en-US")} × ${a.reason.replace(/^auto: /, "")}`).join(" · ")}</p>}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm" data-testid="exclusion-rules">
+                <thead className="text-left text-xs text-muted-foreground"><tr><th className="py-1 font-medium">Match</th><th className="py-1 font-medium">Action</th><th className="py-1 font-medium">Mailbox</th><th className="py-1 font-medium">Note</th><th className="py-1 text-right font-medium">Emails</th><th className="py-1 font-medium">Added</th><th className="py-1"></th></tr></thead>
+                <tbody>
+                  {s.exclusions.rules.map((r) => (
+                    <tr key={r.id} className={`border-t align-top ${r.isActive ? "" : "text-muted-foreground"}`}>
+                      <td className="py-2" dir="auto">
+                        <span className="text-xs text-muted-foreground">{RULE_TYPE_LABEL[r.type]}</span> <span className="font-medium">{r.value}</span>
+                        {r.andSubjectContains && <span className="text-xs text-muted-foreground"> + subject contains &quot;{r.andSubjectContains}&quot;</span>}
+                        {!r.isActive && <span className="ms-1 text-xs">(inactive)</span>}
+                        <details className="mt-1">
+                          <summary className="cursor-pointer text-xs text-muted-foreground underline">Edit</summary>
+                          <div className="mt-2 rounded-md border p-3"><RuleForm save={saveExclusionRule.bind(null, orgId, r.id)} preview={previewExclusionRule.bind(null, orgId)} mailboxes={ruleMailboxes} rule={{ type: r.type, value: r.value, andSubjectContains: r.andSubjectContains, action: r.action, mailboxId: r.mailboxId, note: r.note }} submitLabel="Save rule" /></div>
+                        </details>
+                      </td>
+                      <td className="py-2 whitespace-nowrap">{r.action === "ignore" ? "Ignore" : "No reply needed"}</td>
+                      <td className="py-2">{r.mailbox?.emailAddress ?? "All"}</td>
+                      <td className="py-2 max-w-56" dir="auto">{r.note ?? "–"}</td>
+                      <td className="py-2 text-right">{r.matches.toLocaleString("en-US")}</td>
+                      <td className="py-2 whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(r.createdAt, tz, now)}<br />{r.createdBy === "system" ? "default rule" : r.createdBy}</td>
+                      <td className="py-2 text-right">
+                        {r.isActive
+                          ? <ConfirmForm action={setRuleActive.bind(null, orgId, r.id, false)} confirmText={`Deactivate this rule? The ${r.matches} email(s) it excludes are counted again.`} variant="ghost">Deactivate</ConfirmForm>
+                          : <ConfirmForm action={setRuleActive.bind(null, orgId, r.id, true)} confirmText="Re-activate this rule and apply it to stored emails?" variant="ghost">Activate</ConfirmForm>}
+                      </td>
+                    </tr>
+                  ))}
+                  {!s.exclusions.rules.length && <tr className="border-t"><td colSpan={7} className="py-2 text-muted-foreground">No rules yet. Run <code className="rounded bg-muted px-1">pnpm rules:seed-defaults</code> for the default set, or add one below.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Add a rule</h3>
+              <RuleForm save={saveExclusionRule.bind(null, orgId, null)} preview={previewExclusionRule.bind(null, orgId)} mailboxes={ruleMailboxes} />
+            </div>
           </CardContent>
         </Card>
 

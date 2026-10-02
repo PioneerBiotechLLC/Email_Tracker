@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "replies": "tsx src/cli/replies.ts",
     "ai": "tsx src/cli/ai.ts",
-    "user": "tsx src/cli/user.ts"
+    "user": "tsx src/cli/user.ts",
+    "rules": "tsx src/cli/rules.ts"
   },
   "dependencies": {
     "@email-tracker/core": "workspace:*",

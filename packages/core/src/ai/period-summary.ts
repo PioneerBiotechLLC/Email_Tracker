@@ -14,6 +14,7 @@ import { getDb, type Prisma, type PrismaClient } from "../db.js";
 import { getEnv } from "../env.js";
 import { createLogger } from "../log.js";
 import { localParts, zonedTimeToUtc } from "../sync/business-hours.js";
+import { COUNTED } from "../sync/exclusions.js";
 import { getAnthropic, supportsEffort } from "./client.js";
 import { estimateTokens } from "./pricing.js";
 import { formatLocalDate, type SummaryLanguage } from "./prompts.js";
@@ -189,7 +190,7 @@ export interface CollectOptions {
 export async function collectPeriodActivity(db: PrismaClient, opts: CollectOptions): Promise<PeriodActivity> {
   const now = opts.now ?? new Date();
   const messages = await db.message.findMany({
-    where: { ...mailboxScope({ orgId: opts.orgId }, opts.mailboxId), isAutoReply: false, receivedAt: { gte: opts.from, lte: opts.to } },
+    where: { ...mailboxScope({ orgId: opts.orgId }, opts.mailboxId), isAutoReply: false, ...COUNTED, receivedAt: { gte: opts.from, lte: opts.to } },
     select: { threadId: true, direction: true, receivedAt: true, repliedAt: true, fromAddress: true, fromName: true, toAddresses: true, bodyPreview: true, mailbox: { select: { emailAddress: true, aliases: true } } },
   });
   const threadIds = [...new Set(messages.map((m) => m.threadId))];

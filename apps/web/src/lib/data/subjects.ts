@@ -1,10 +1,10 @@
 import "server-only";
-import { getDb, mailboxScope, worstStatus, type SessionContext } from "@email-tracker/core";
+import { getDb, listVisibility, mailboxScope, worstStatus, type SessionContext } from "@email-tracker/core";
 import type { Filters } from "@/lib/filters";
 
 export async function getSubjectGroups(ctx: SessionContext, f: Filters, now = new Date()) {
   const db = getDb();
-  const where = { ...mailboxScope(ctx, f.mailboxId), lastMessageAt: { gte: f.from, lte: f.to }, ...(f.q ? { normalizedSubject: { contains: f.q.toLowerCase() } } : {}) };
+  const where = { ...mailboxScope(ctx, f.mailboxId), ...listVisibility(false), lastMessageAt: { gte: f.from, lte: f.to }, ...(f.q ? { normalizedSubject: { contains: f.q.toLowerCase() } } : {}) };
   const groups = await db.thread.groupBy({
     by: ["normalizedSubject"],
     where,

@@ -16,6 +16,12 @@ export { syncMailbox, syncMailboxLocked, acquireSyncLock, releaseSyncLock, type 
 export { recomputeThread, recomputeMailboxThreads, recomputeSiblingThreads, businessHoursFor, slaHoursFor, ownerAddresses, type RecomputeResult } from "./sync/threads.js";
 export { orgDomains, domainOf, internalRecipients, copyRank, pickPrimary, assignPrimaries, dedupeMessageIds, dedupeOrgMessages, threadRefKey, type MessageCopy, type ThreadRef, type DedupeOrgResult } from "./sync/dedupe.js";
 export {
+  RULE_TYPES, EXCLUSION_ACTIONS, RULE_VALUE_MAX, normalizeRuleValue, ruleValueError, matchesRule, orderRules, headerSignals, isNoReplySender, autoSignal, evaluateExclusion, threadExclusion, exclusionReason, listVisibility, COUNTED,
+  type RuleType, type ExclusionAction, type RuleLike, type ExclusionInput, type ExclusionSettings, type Exclusion,
+} from "./sync/exclusions.js";
+export { loadExclusionContext, reapplyExclusions, countRuleMatches, seedDefaultRules, DEFAULT_EXCLUSION_RULES, type ExclusionContext, type ReapplyResult, type RuleDraft } from "./sync/exclusion-rules.js";
+export { orgSettings, type OrgSettings } from "./org-settings.js";
+export {
   detectReplies, computeThreadStatus, effectiveTime, isFromUs, isRealInbound, isRealOutbound, REPLY_VERBS, FORWARD_VERB,
   type ReplyInputMessage, type ReplyResult, type DetectOptions, type ThreadState, type StatusOptions, type StatusResult,
 } from "./sync/replies.js";

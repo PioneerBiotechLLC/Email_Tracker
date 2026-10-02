@@ -30,7 +30,9 @@
     "dev:lan": "pnpm --filter @email-tracker/web dev:lan",
     "org:seed": "pnpm --filter @email-tracker/core seed-orgs",
     "org:seed-pioneer": "pnpm --filter @email-tracker/core seed-orgs pioneer",
-    "org:seed-api-pharma": "pnpm --filter @email-tracker/core seed-orgs api-pharma"
+    "org:seed-api-pharma": "pnpm --filter @email-tracker/core seed-orgs api-pharma",
+    "rules:seed-defaults": "pnpm --filter @email-tracker/worker rules seed-defaults",
+    "rules:reapply": "pnpm --filter @email-tracker/worker rules reapply"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

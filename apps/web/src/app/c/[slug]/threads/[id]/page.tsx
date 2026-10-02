@@ -1,18 +1,23 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { domainOf, orgDomains } from "@email-tracker/core";
+import { ignoreSender } from "@/actions/rules";
 import { classifyThread, closeThread, reopenThread, resummarizeThread, setNeedsReply } from "@/actions/thread";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmForm } from "@/components/shared/confirm-form";
-import { CategoryChip, PriorityChip, StatusBadge } from "@/components/shared/badges";
+import { CategoryChip, ExcludedBadge, PriorityChip, StatusBadge } from "@/components/shared/badges";
+import { IgnoreMenu } from "@/components/shared/ignore-menu";
+import { RuleBanner } from "@/components/shared/rule-banner";
 import { getThreadDetail } from "@/lib/data/thread-detail";
 import { CATEGORY_LABEL, formatDateTime, formatMinutes, formatSince, titleCase } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 const METHOD: Record<string, string> = { outlook_verb: "Outlook reply verb", header_match: "email headers", conversation_match: "conversation match" };
+export const maxDuration = 60; // the quick "ignore" actions re-apply the rules to stored mail
 
-export default async function ThreadPage({ params, searchParams }: { params: Promise<{ slug: string; id: string }>; searchParams: Promise<{ ai?: string; detail?: string }> }) {
+export default async function ThreadPage({ params, searchParams }: { params: Promise<{ slug: string; id: string }>; searchParams: Promise<{ ai?: string; detail?: string; rule?: string; affected?: string }> }) {
   const { slug, id } = await params;
   const sp = await searchParams;
   const { ctx, org } = await getCompanyContext(slug);
@@ -24,6 +29,8 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
   const now = new Date();
   const owners = new Set([thread.mailbox.emailAddress, ...thread.mailbox.aliases]);
   const isAdmin = ctx.role === "admin";
+  const ownDomains = orgDomains(org);
+  const returnTo = `${base}/threads/${thread.id}`;
   const asks = Array.isArray(thread.asks) ? (thread.asks as { from: string; ask: string; due: string | null }[]) : [];
   const keyPoints = Array.isArray(thread.keyPoints) ? (thread.keyPoints as string[]) : [];
   // Other mailboxes of the company that hold copies of these emails (we were Cc'd, or they were)
@@ -41,6 +48,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <StatusBadge status={thread.status} overdueAt={thread.overdueAt} now={now} />
             <CategoryChip category={thread.category} /><PriorityChip priority={thread.priority} />
+            {thread.exclusionAction && <ExcludedBadge action={thread.exclusionAction} />}
             <span>{thread.mailbox.emailAddress} · {messages.length} messages</span>
             {!thread.duplicateOf && alsoIn.size > 0 && <span>· also received by {[...alsoIn.entries()].map(([addr, tid], i) => <span key={addr}>{i > 0 && ", "}<Link href={`${base}/threads/${tid}`} className="underline">{addr}</Link></span>)}</span>}
             {thread.status === "awaiting_us" && thread.awaitingSince && <span>· waiting {formatSince(thread.awaitingSince, now)}</span>}
@@ -65,6 +73,15 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
           <Link href={`${base}/threads/${thread.duplicateOf.id}`} className="underline">Open the primary thread</Link>.
         </div>
       )}
+      <RuleBanner orgId={org.id} rule={sp.rule} affected={sp.affected} returnTo={returnTo} />
+      {thread.exclusionAction && (
+        <div className="rounded-md border px-3 py-2 text-sm status-muted" role="note" data-testid="excluded-notice">
+          {thread.exclusionAction === "ignore"
+            ? "Every incoming email in this thread is ignored by an exclusion rule: the thread is hidden from the tracker, threads and statistics (use \"Show excluded\" to list it) and is not sent to the AI."
+            : "Every incoming email in this thread is excluded (no reply needed): it is never counted as awaiting a reply or overdue, and is not sent to the AI."}
+          {isAdmin && <> <Link href={`${base}/settings#exclusion-rules`} className="underline">Manage exclusion rules</Link>.</>}
+        </div>
+      )}
       {sp.ai && (
         <div className={cn("rounded-md border px-3 py-2 text-sm", sp.ai === "summarized" ? "status-replied" : "status-waiting")} role="status">
           {sp.ai === "summarized" ? `Summary updated (${sp.detail}).` : `Summary not updated: ${sp.ai}${sp.detail ? ` — ${sp.detail}` : ""}.`}
@@ -84,10 +101,14 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
                   {m.isAutoReply && <span className="rounded bg-muted px-1">automatic reply</span>}
                   {m.hasAttachments && <span>· 📎</span>}
                   {m.duplicateOf && <span className="rounded bg-muted px-1" title={`The same email is tracked in ${m.duplicateOf.mailbox.emailAddress}`}>copy of {m.duplicateOf.mailbox.emailAddress}</span>}
+                  {m.exclusionAction && <ExcludedBadge action={m.exclusionAction} reason={m.excludedReason} />}
+                  {isAdmin && !ours && m.exclusionAction !== "ignore" && domainOf(m.fromAddress) && !ownDomains.has(domainOf(m.fromAddress)) && (
+                    <span className="ms-auto"><IgnoreMenu address={m.fromAddress} domain={domainOf(m.fromAddress)} ignoreSender={ignoreSender.bind(null, org.id, m.id, "sender_email", returnTo)} ignoreDomain={ignoreSender.bind(null, org.id, m.id, "sender_domain", returnTo)} /></span>
+                  )}
                 </header>
                 {m.internalRecipients.length > 0 && <p className="mb-1 text-xs text-muted-foreground">Also to (in-company): {m.internalRecipients.join(", ")}</p>}
                 <div className="whitespace-pre-wrap break-words" dir="auto">{m.body || <span className="italic text-muted-foreground">(empty)</span>}</div>
-                {!ours && !m.isAutoReply && (
+                {!ours && !m.isAutoReply && !m.exclusionAction && (
                   <footer className="mt-2 border-t pt-1.5 text-xs text-muted-foreground">
                     {m.repliedAt ? (
                       <>Replied {formatDateTime(m.repliedAt, tz, now)} via {METHOD[m.replyMethod ?? ""] ?? "?"} · {formatMinutes(m.responseBusinessMinutes)} business ({formatMinutes(m.responseMinutes)} raw)
@@ -122,6 +143,8 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
                 </>
               ) : thread.summaryError ? (
                 <p className="text-status-bad">Summary failed: {thread.summaryError.replace(/^\S+\s/, "")}</p>
+              ) : thread.exclusionAction ? (
+                <p className="text-muted-foreground">Excluded mail is not summarized.</p>
               ) : <p className="italic text-muted-foreground">Summary pending — it is generated a couple of minutes after the last message.</p>}
               {thread.summaryError && thread.summary && <p className="text-xs text-status-bad">Last attempt failed: {thread.summaryError.replace(/^\S+\s/, "").slice(0, 120)}</p>}
             </CardContent>

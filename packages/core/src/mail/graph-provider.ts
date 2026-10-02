@@ -37,6 +37,7 @@ const SELECT_FIELDS = [
   "isDraft",
   "parentFolderId",
   "internetMessageHeaders",
+  "inferenceClassification",
 ];
 
 const EXT_PROPS_FILTER = "id eq 'Integer 0x1081' or id eq 'SystemTime 0x1082'";
@@ -67,6 +68,7 @@ interface GraphMessage {
   importance?: string;
   isDraft?: boolean;
   internetMessageHeaders?: RawHeader[];
+  inferenceClassification?: string;
   singleValueExtendedProperties?: GraphExtProp[];
 }
 interface DeltaResponse {
@@ -124,6 +126,7 @@ export function toRawMessage(m: GraphMessage): RawMessage {
     headers: m.internetMessageHeaders ?? null,
     lastVerb: ext.lastVerb,
     lastVerbAt: ext.lastVerbAt,
+    inferenceClassification: m.inferenceClassification?.toLowerCase() ?? null,
   };
 }
 

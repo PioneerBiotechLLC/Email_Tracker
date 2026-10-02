@@ -65,7 +65,7 @@ program
     const tz = mb.org.timezone;
 
     const inbound = await db.message.findMany({
-      where: { mailboxId: mb.id, direction: "inbound", isAutoReply: false, fromAddress: { notIn: owners }, receivedAt: { gte: since } },
+      where: { mailboxId: mb.id, direction: "inbound", isAutoReply: false, exclusionAction: null, fromAddress: { notIn: owners }, receivedAt: { gte: since } },
       select: { repliedAt: true, replyMethod: true, responseMinutes: true, responseBusinessMinutes: true },
     });
     const replied = inbound.filter((m) => m.repliedAt);
@@ -79,7 +79,7 @@ program
       db.thread.count({ where: { mailboxId: mb.id, status: "awaiting_us", overdueAt: { lte: now } } }),
     ]);
     const oldest = await db.message.findMany({
-      where: { mailboxId: mb.id, direction: "inbound", isAutoReply: false, repliedAt: null, fromAddress: { notIn: owners }, thread: { status: "awaiting_us" } },
+      where: { mailboxId: mb.id, direction: "inbound", isAutoReply: false, exclusionAction: null, repliedAt: null, fromAddress: { notIn: owners }, thread: { status: "awaiting_us" } },
       orderBy: { receivedAt: "asc" },
       take: 10,
       select: { receivedAt: true, fromAddress: true, fromName: true, subject: true, thread: { select: { overdueAt: true } } },
@@ -87,7 +87,7 @@ program
 
     const pct = inbound.length ? ((replied.length / inbound.length) * 100).toFixed(0) : "0";
     console.log(`\nReply report — ${mb.emailAddress} — last ${opts.days} days (times in ${tz})\n`);
-    console.log(`  Inbound emails (real, non-auto):  ${inbound.length}`);
+    console.log(`  Inbound emails (real, not excluded): ${inbound.length}`);
     console.log(`  Replied:                          ${replied.length} (${pct}%)  [${Object.entries(methods).map(([k, v]) => `${k}: ${v}`).join(", ") || "-"}]`);
     console.log(`  Response time, wall-clock:        median ${fmtMinutes(median(raw))}, average ${fmtMinutes(avg(raw))}`);
     console.log(`  Response time, business hours:    median ${fmtMinutes(median(biz))}, average ${fmtMinutes(avg(biz))}`);
