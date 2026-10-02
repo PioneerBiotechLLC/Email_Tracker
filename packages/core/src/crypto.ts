@@ -26,7 +26,8 @@ export function encryptText(plain: string, key: Buffer): string {
 
 export function decryptText(payload: string, key: Buffer): string {
   const [prefix, ivB64, tagB64, ctB64] = payload.split(":");
-  if (prefix !== PREFIX || !ivB64 || !tagB64 || !ctB64) throw new Error("Not an encrypted payload");
+  // an empty text encrypts to an empty ciphertext part, which is still a valid payload
+  if (prefix !== PREFIX || !ivB64 || !tagB64 || ctB64 === undefined) throw new Error("Not an encrypted payload");
   const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"));
   decipher.setAuthTag(Buffer.from(tagB64, "base64"));
   return Buffer.concat([decipher.update(Buffer.from(ctB64, "base64")), decipher.final()]).toString("utf8");
