@@ -57,7 +57,7 @@ export default async function CompaniesPage({ searchParams }: { searchParams: Pr
         <div><h1 className="text-2xl font-bold">Companies</h1><p className="text-sm text-muted-foreground">Owner view · signed in as {owner.email} · <Link href="/" className="underline">back to dashboard</Link></p></div>
         {storage && (
           <div className={`rounded-md border px-3 py-2 text-sm ${storage.warn ? "status-overdue" : ""}`} role="status">
-            Database: <strong>{formatBytes(storage.bytes)}</strong> of {formatBytes(storage.limitBytes)} ({storage.pct}%){storage.warn && " — near the plan limit: switch companies to preview-only storage or shorten retention"}
+            Database: <strong>{formatBytes(storage.bytes)}</strong> of {formatBytes(storage.limitBytes)} ({storage.pct}%), of which search index {formatBytes(storage.searchIndexBytes)}{storage.warn && " — near the plan limit: switch companies to preview-only storage or shorten retention"}
           </div>
         )}
       </div>

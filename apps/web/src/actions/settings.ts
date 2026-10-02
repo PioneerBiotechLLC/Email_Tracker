@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { assertSameOrg, getDb, logAudit, recomputeMailboxThreads } from "@email-tracker/core";
+import { assertSameOrg, getDb, logAudit, orgSettings, recomputeMailboxThreads, type Prisma } from "@email-tracker/core";
 import { requireOrgAction } from "@/lib/session";
 
 const hhmm = z.string().regex(/^\d{2}:\d{2}$/, "Use HH:MM");
@@ -99,9 +99,16 @@ export async function updateStorage(orgId: string, _prev: ActionResult | null, f
   const parsed = storageSchema.safeParse({ bodyStorage: formData.get("bodyStorage"), retentionDays: formData.get("retentionDays") });
   if (!parsed.success) return { ok: false, message: parsed.error.issues.map((i) => i.message).join("; ") };
   const db = getDb();
-  const before = await db.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { bodyStorage: true, retentionDays: true } });
-  await db.organization.update({ where: { id: ctx.orgId }, data: parsed.data });
-  await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "settings.storage", targetType: "organization", targetId: ctx.orgId, before, after: parsed.data });
+  const org = await db.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { bodyStorage: true, retentionDays: true, settings: true } });
+  const before = { bodyStorage: org.bodyStorage, retentionDays: org.retentionDays, searchIndexBodies: orgSettings(org.settings).searchIndexBodies };
+  const after = { ...parsed.data, searchIndexBodies: formData.get("searchIndexBodies") === "on" };
+  const settings = { ...(org.settings && typeof org.settings === "object" && !Array.isArray(org.settings) ? org.settings : {}), searchIndexBodies: after.searchIndexBodies } as Prisma.InputJsonObject;
+  await db.organization.update({ where: { id: ctx.orgId }, data: { ...parsed.data, settings } });
+  await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "settings.storage", targetType: "organization", targetId: ctx.orgId, before, after });
   revalidatePath("/c/[slug]/settings", "page");
-  return { ok: true, message: parsed.data.bodyStorage === "preview_only" ? "Saved. New emails keep the preview only; existing bodies stay until the retention purge." : "Saved." };
+  const notes = [
+    parsed.data.bodyStorage === "preview_only" ? "New emails keep the preview only; existing bodies stay until the retention purge." : "",
+    after.searchIndexBodies !== before.searchIndexBodies ? "The search setting applies to new emails now; run `pnpm search:reindex --all` to apply it to stored ones." : "",
+  ].filter(Boolean);
+  return { ok: true, message: ["Saved.", ...notes].join(" ") };
 }

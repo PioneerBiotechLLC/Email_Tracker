@@ -94,6 +94,7 @@ pnpm db:studio                               # browse the data
 - Reads `PidTagLastVerbExecuted` (0x1081) / `PidTagLastVerbExecutionTime` (0x1082) via `$expand` on the delta call; if the tenant rejects that, falls back to `$batch` (20/request) lookups automatically.
 - Keeps `In-Reply-To` / `References`, flags auto-replies (`Auto-Submitted`, `X-Auto-Response-Suppress`, "Automatic reply:" subjects).
 - Applies the company's **exclusion rules** and built-in bulk-mail detection to every incoming message (§9).
+- Writes each message's **search vector** (for Ask, §10) with one statement per page, and stores its Outlook `webLink`.
 - Cleans bodies: HTML → text, strips quoted history (English/Arabic/Outlook header blocks) and signatures, caps at 8,000 chars.
 - Groups messages into `Thread` rows by `conversationId` per mailbox, with a `normalizedSubject` (RE/FW/رد prefixes and ticket tags removed) for the "By subject" view.
 - Honours `Retry-After` on 429/503 and backs off exponentially.
@@ -333,6 +334,71 @@ pnpm sync:once all --reset          # optional: re-reads the backfill window so 
 
 Header signals and the Focused/Other flag are recorded when a message is synced. Mail stored before this version has neither until a `--reset` sync re-reads it; sender- and subject-based rules and the `noreply@` detection work on old mail immediately. (Graph delta links remember the fields they were created with, so `--reset` is also what makes *new* mail carry the Focused/Other flag.)
 
+## 10. Ask (chat)
+
+**Ask** (`/c/<slug>/ask`) answers questions such as *"What happened to shipment 4512?"* or *"Latest update from supplier X about excipient Y?"* with a short answer taken only from the stored emails, and numbered citations that open the exact emails (in the dashboard thread view, and in Outlook when a link is stored). It is off by default (`CHAT_ENABLED`): no menu entry, and the page and its route return 404.
+
+**How it works**
+
+1. **Search index.** Every message has a `searchVector` (Postgres `tsvector`, GIN index) built from subject, sender, recipients and the cleaned body; every thread has one built from subject + AI summary + key points + next action. The vectors are computed in app code from the plaintext at write time (bodies may be encrypted at rest) and written with one statement per sync page. Postgres' `'simple'` configuration is used: no stemming, no stop words. The app normalizes text the same way when indexing and when searching ([packages/core/src/ask/text.ts](packages/core/src/ask/text.ts)): letters and digits become separate tokens and every other character separates, so `4512`, `PO 4512`, `PO-4512`, `PO#4512` and `INV/2026/4512` all find each other; Arabic-Indic digits, diacritics, alef/ya/ta-marbuta variants and a leading "ال" are folded so `الإنسولين` matches `انسولين`.
+2. **Tools.** Claude gets four read-only tools ([packages/core/src/ask/tools.ts](packages/core/src/ask/tools.ts)): `search_emails`, `search_threads`, `get_thread`, `get_messages`. The company and the mailboxes they may read come from the signed-in user's session, never from model input; a mailbox argument can only narrow the search; every row is re-checked before it is returned; excluded mail (§9), auto-replies and Cc copies of the same email are left out. No tool can write anything or reach Microsoft Graph.
+3. **Answer loop** ([packages/core/src/ask/answer.ts](packages/core/src/ask/answer.ts)). At most 6 tool calls and about 40k input tokens per question; when a limit is hit the model answers with what it has and says so. The final answer comes through a `final_answer` tool (`answer_markdown`, `citations`, `found`). The server then checks every citation: an email id that no tool returned for this question is dropped and its marker removed from the text. An answer that claims facts but has no valid citation left is shown as **Unverified** (no automatic retry: a retry costs another full call and can fail the same way).
+4. **Follow-ups.** A chat keeps its earlier questions and answers as context, with each answer's citations (id, subject, sender, date) but not the emails that were read, so follow-ups stay cheap. A chat holds up to 10 questions.
+5. **Privacy and limits.** Chats are private to the user who asked (admins see usage totals only, in Settings → AI usage). Each question is audited as `chat.ask` (question text only). The retention purge also removes chats older than the company's retention window. Every Claude call is logged in `AiUsage` with `purpose = chat` and the user; questions count toward `AI_MAX_CALLS_PER_DAY`, and each user may ask `AI_CHAT_MAX_QUESTIONS_PER_USER_PER_DAY` questions per day.
+
+**Privacy note on the search index.** The index stores the *words* of each email (lower-cased, without order beyond positions) as plain text in the database, even when `DATA_ENCRYPTION_KEY` encrypts the bodies. That is the price of searching inside Postgres. A company that does not want this can untick *Settings → Storage & retention → "Index email bodies for search"* (`searchIndexBodies`, default on): then only subjects and participants are indexed, and questions about body content will find less. After changing it run `pnpm search:reindex --org <slug> --all`.
+
+**Environment**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHAT_ENABLED` | `false` | switches the Ask page on (`true` / `1`) |
+| `ANTHROPIC_CHAT_MODEL` | `claude-sonnet-5-5` | model that answers questions |
+| `ANTHROPIC_CHAT_DEEP_MODEL` | `claude-opus-5-5` | model used when the user ticks "Deep answer" |
+| `AI_CHAT_MAX_QUESTIONS_PER_USER_PER_DAY` | `50` | per-user daily limit (calls also count toward `AI_MAX_CALLS_PER_DAY`) |
+
+`AI_EFFORT` (default `low`) also applies to chat.
+
+**Commands**
+
+```bash
+pnpm search:reindex [--org <slug>] [--all]     # build the search index for stored mail (500 rows per statement; re-run to resume; --all rebuilds everything)
+pnpm search:backfill-links [--org <slug>]      # fetch "Open in Outlook" links for mail synced before links were stored (read-only $batch GETs, resumable)
+pnpm ask:eval [--deep]                         # 12 fixed questions against the demo company with the real API; prints pass/fail and cost
+```
+
+**Cost per question** (measured with `pnpm ask:eval` on the demo data, 2 Oct 2026, `AI_EFFORT=low`; 12 questions including one Arabic, one follow-up and one with no answer in the mail):
+
+| Model | Passed | Average per question | Range |
+|---|---|---|---|
+| `claude-sonnet-5-5` (default) | 12 / 12 | $0.0085 | $0.0055 – $0.0150 |
+| `claude-opus-5-5` (Deep answer) | 12 / 12 | $0.0157 | $0.0094 – $0.0298 |
+
+Demo emails are short, so these are the low end. Real threads with long bodies cost more per question. As an upper estimate (computed from the prices, not measured): a question that fills the whole 40k-token budget is on the order of $0.10 on Sonnet and $0.25 on Opus. Most of the input is served from the prompt cache (system prompt and tools are cached, and so is the conversation between the rounds of one question).
+
+**Storage.** Measured on 10,000 synthetic emails with ~900-character bodies: about 14.6 MB of vectors + 7.7 MB of GIN index, so **about 22 MB per 10,000 emails** (the stored bodies of the same emails take 17 MB). On Neon's free 0.5 GB this is the largest new consumer; the Companies page shows the search index size next to the database size. With `searchIndexBodies` off the index is a small fraction of that.
+
+**Turning it on in production**
+
+```bash
+# 1. laptop, production .env (cp .env.production .env)
+pnpm db:deploy                    # additive migration: new columns, tables and indexes only
+# 2. deploy the app (git push); CHAT_ENABLED still unset, so nothing is visible yet. New mail is indexed from now on.
+pnpm search:reindex               # index the mail that is already stored
+pnpm search:backfill-links        # Outlook links for that mail
+# 3. Vercel → Environment Variables: CHAT_ENABLED=true (and optionally the model variables), then redeploy
+```
+
+Outlook links for *new* mail: Graph delta links remember the fields they were created with, so mailboxes synced before this version keep delivering new mail without `webLink` until a `pnpm sync:once <mailbox> --reset` (the same reset §9 recommends). Until then, re-running `pnpm search:backfill-links` fills the gaps; answers work either way, only the "Open in Outlook" link is missing.
+
+To switch it off again, unset `CHAT_ENABLED` and redeploy; stored chats and the index stay.
+
+**Tests.** `pnpm test` runs the pure logic (text normalization, query plans, the loop with a mocked Claude client, citation validation, prompt-injection cases). The Postgres-backed tests (real full-text search, tool scope across companies, usage rows and cost, limits, retention, the migration) run only when `TEST_DATABASE_URL` names a disposable database with the migrations applied — never `DATABASE_URL`, because `.env` may point at production:
+
+```bash
+TEST_DATABASE_URL="postgres://…@localhost:…/…" pnpm test
+```
+
 ## Commands
 
 | Command | What it does |
@@ -346,6 +412,9 @@ Header signals and the Focused/Other flag are recorded when a message is synced.
 | `pnpm replies:report <email> [--days 30]` | reply stats + oldest unanswered emails, for spot-checking against Outlook |
 | `pnpm rules:seed-defaults [--org <slug>] [--no-apply]` | add the default exclusion rules to companies that lack them, then re-apply all rules |
 | `pnpm rules:reapply [--org <slug>]` | re-evaluate stored emails against the current exclusion rules and recompute the affected threads |
+| `pnpm search:reindex [--org <slug>] [--all]` | build / rebuild the Ask search index for stored emails and threads (resumable) |
+| `pnpm search:backfill-links [--org <slug>]` | fetch Outlook links for emails synced before links were stored (read-only, resumable) |
+| `pnpm ask:eval [--deep]` | Ask evaluation against the demo company with the real Claude API (costs a few cents) |
 | `pnpm ai:backfill <email\|all> [--limit N] [--dry-run]` | summarize unsummarized threads via the Batch API; dry-run prints the cost estimate |
 | `pnpm ai:summarize <email\|all> [--limit N]` | live summaries for threads with new messages |
 | `pnpm ai:summarize-thread <threadId> [--force]` | summarize one thread, print JSON |
@@ -365,5 +434,7 @@ Header signals and the Focused/Other flag are recorded when a message is synced.
 See [.env.example](.env.example). Required: `DATABASE_URL`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Optional: `BACKFILL_DAYS` (90), `REPLY_SLA_HOURS` (24, business hours; per-org override via `Organization.replySlaHours`), `DATA_ENCRYPTION_KEY`, `LOG_LEVEL` (`debug|info|warn|error`).
 
 Dashboard: `AUTH_SECRET`, `AUTH_MICROSOFT_ENTRA_ID_ID`, `AUTH_MICROSOFT_ENTRA_ID_SECRET`, `AUTH_MICROSOFT_ENTRA_ID_ISSUER`, `AUTH_URL` (production).
+
+Ask (chat): `CHAT_ENABLED` (`false`), `ANTHROPIC_CHAT_MODEL` (`claude-sonnet-5-5`), `ANTHROPIC_CHAT_DEEP_MODEL` (`claude-opus-5-5`), `AI_CHAT_MAX_QUESTIONS_PER_USER_PER_DAY` (50) — see §10.
 
 AI: `ANTHROPIC_API_KEY` (required for summaries), `ANTHROPIC_MODEL` (`claude-sonnet-5-5`), `ANTHROPIC_MODEL_LIGHT` (optional, e.g. `claude-haiku-4-5`), `AI_MAX_CALLS_PER_DAY` (500, per org per day), `AI_SUMMARY_DEBOUNCE_MINUTES` (2), `AI_EFFORT` (`low`).

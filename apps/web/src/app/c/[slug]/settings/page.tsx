@@ -99,6 +99,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
             <SettingsForm action={updateStorage.bind(null, orgId)}>
               <label className="block">Store email bodies<select name="bodyStorage" defaultValue={s.org.bodyStorage} className={field}><option value="full">Full cleaned text (best summaries)</option><option value="preview_only">Preview only (first ~500 characters)</option></select></label>
               <label className="block">Keep emails for (days)<input type="number" name="retentionDays" min={30} max={3650} defaultValue={s.org.retentionDays} className={field} /></label>
+              <label className="flex items-start gap-2"><input type="checkbox" name="searchIndexBodies" defaultChecked={s.searchIndexBodies} className="mt-1" /><span>Index email bodies for search (Ask). The search index stores the words of each email as plain text, even when bodies are encrypted. Unticked: only subjects and participants are searchable.</span></label>
             </SettingsForm>
           </CardContent>
         </Card>
@@ -114,6 +115,11 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
               <h3 className="mb-2 text-sm font-semibold">By day</h3>
               <UsageTable rows={[...s.usage.byDay].reverse()} />
             </div>
+            {s.usage.byPurpose.some((p) => p.key === "chat") && (
+              <p className="text-sm md:col-span-2" data-testid="chat-usage">
+                Ask (chat): {s.usage.byPurpose.filter((p) => p.key === "chat").map((p) => <span key={p.key}><strong>{s.chatQuestions}</strong> questions, {p.calls} calls, <strong>{formatUsd(p.costUsd)}</strong></span>)} this month. Chats are private to the person who asked; only these totals are visible to admins.
+              </p>
+            )}
             <p className="text-sm md:col-span-2">Total: <strong>{s.usage.total.calls}</strong> calls ({s.usage.total.errors} errors), {s.usage.total.inputTokens.toLocaleString("en-US")} input / {s.usage.total.outputTokens.toLocaleString("en-US")} output tokens, <strong>{formatUsd(s.usage.total.costUsd)}</strong></p>
           </CardContent>
         </Card>
@@ -128,11 +134,11 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
             {s.exclusions.auto.length > 0 && <p className="text-sm text-muted-foreground">Detected automatically: {s.exclusions.auto.map((a) => `${a.count.toLocaleString("en-US")} × ${a.reason.replace(/^auto: /, "")}`).join(" · ")}</p>}
             <div className="overflow-x-auto">
               <table className="w-full text-sm" data-testid="exclusion-rules">
-                <thead className="text-left text-xs text-muted-foreground"><tr><th className="py-1 font-medium">Match</th><th className="py-1 font-medium">Action</th><th className="py-1 font-medium">Mailbox</th><th className="py-1 font-medium">Note</th><th className="py-1 text-right font-medium">Emails</th><th className="py-1 font-medium">Added</th><th className="py-1"></th></tr></thead>
+                <thead className="text-left text-xs text-muted-foreground"><tr><th className="py-1 pe-4 font-medium">Match</th><th className="py-1 pe-4 font-medium">Action</th><th className="py-1 pe-4 font-medium">Mailbox</th><th className="py-1 pe-4 font-medium">Note</th><th className="py-1 pe-4 text-right font-medium">Emails</th><th className="py-1 pe-4 font-medium">Added</th><th className="py-1"></th></tr></thead>
                 <tbody>
                   {s.exclusions.rules.map((r) => (
                     <tr key={r.id} className={`border-t align-top ${r.isActive ? "" : "text-muted-foreground"}`}>
-                      <td className="py-2" dir="auto">
+                      <td className="py-2 pe-4" dir="auto">
                         <span className="text-xs text-muted-foreground">{RULE_TYPE_LABEL[r.type]}</span> <span className="font-medium">{r.value}</span>
                         {r.andSubjectContains && <span className="text-xs text-muted-foreground"> + subject contains &quot;{r.andSubjectContains}&quot;</span>}
                         {!r.isActive && <span className="ms-1 text-xs">(inactive)</span>}
@@ -141,11 +147,11 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
                           <div className="mt-2 rounded-md border p-3"><RuleForm save={saveExclusionRule.bind(null, orgId, r.id)} preview={previewExclusionRule.bind(null, orgId)} mailboxes={ruleMailboxes} rule={{ type: r.type, value: r.value, andSubjectContains: r.andSubjectContains, action: r.action, mailboxId: r.mailboxId, note: r.note }} submitLabel="Save rule" /></div>
                         </details>
                       </td>
-                      <td className="py-2 whitespace-nowrap">{r.action === "ignore" ? "Ignore" : "No reply needed"}</td>
-                      <td className="py-2">{r.mailbox?.emailAddress ?? "All"}</td>
-                      <td className="py-2 max-w-56" dir="auto">{r.note ?? "–"}</td>
-                      <td className="py-2 text-right">{r.matches.toLocaleString("en-US")}</td>
-                      <td className="py-2 whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(r.createdAt, tz, now)}<br />{r.createdBy === "system" ? "default rule" : r.createdBy}</td>
+                      <td className="py-2 pe-4 whitespace-nowrap">{r.action === "ignore" ? "Ignore" : "No reply needed"}</td>
+                      <td className="py-2 pe-4">{r.mailbox?.emailAddress ?? "All"}</td>
+                      <td className="py-2 pe-4 max-w-56" dir="auto">{r.note ?? "–"}</td>
+                      <td className="py-2 pe-4 text-right">{r.matches.toLocaleString("en-US")}</td>
+                      <td className="py-2 pe-4 whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(r.createdAt, tz, now)}<br />{r.createdBy === "system" ? "default rule" : r.createdBy}</td>
                       <td className="py-2 text-right">
                         {r.isActive
                           ? <ConfirmForm action={setRuleActive.bind(null, orgId, r.id, false)} confirmText={`Deactivate this rule? The ${r.matches} email(s) it excludes are counted again.`} variant="ghost">Deactivate</ConfirmForm>

@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
-import { BarChart3, Building2, ChevronsUpDown, Inbox, Layers, MessagesSquare, Settings, Sparkles } from "lucide-react";
+import { BarChart3, Building2, ChevronsUpDown, Inbox, Layers, MessageCircleQuestion, MessagesSquare, Settings, Sparkles } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { rememberCompany } from "@/app/c/company-cookie";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ const NAV = [
   { href: "/threads", label: "Threads", icon: MessagesSquare },
   { href: "/subjects", label: "By Subject", icon: Layers },
   { href: "/summary", label: "Summary", icon: Sparkles },
+  { href: "/ask", label: "Ask", icon: MessageCircleQuestion, chatOnly: true },
   { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
 
@@ -64,13 +65,16 @@ export function CompanySwitcher({ current, companies, isOwner }: { current: Comp
   );
 }
 
-export function Sidebar({ current, companies, role, isOwner }: { current: CompanyItem & { isDemo: boolean }; companies: CompanyItem[]; role: "admin" | "viewer"; isOwner: boolean }) {
+/** Menu entries this user sees: Settings for admins only, Ask only while the chat is switched on. */
+const visibleNav = (role: "admin" | "viewer", chatEnabled: boolean) => NAV.filter((n) => (!n.adminOnly || role === "admin") && (!n.chatOnly || chatEnabled));
+
+export function Sidebar({ current, companies, role, isOwner, chatEnabled }: { current: CompanyItem & { isDemo: boolean }; companies: CompanyItem[]; role: "admin" | "viewer"; isOwner: boolean; chatEnabled: boolean }) {
   const { href, active } = useNav();
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r bg-card md:flex" aria-label="Main navigation">
       <CompanySwitcher current={current} companies={companies} isOwner={isOwner} />
       <nav className="flex flex-1 flex-col gap-1 p-3">
-        {NAV.filter((n) => !n.adminOnly || role === "admin").map((n) => (
+        {visibleNav(role, chatEnabled).map((n) => (
           <Link key={n.href} href={href(n.href)} aria-current={active(n.href) ? "page" : undefined}
             className={cn("flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors", active(n.href) ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
             <n.icon className="size-4" aria-hidden />
@@ -82,11 +86,11 @@ export function Sidebar({ current, companies, role, isOwner }: { current: Compan
   );
 }
 
-export function MobileNav({ role, isOwner }: { role: "admin" | "viewer"; isOwner: boolean }) {
+export function MobileNav({ role, isOwner, chatEnabled }: { role: "admin" | "viewer"; isOwner: boolean; chatEnabled: boolean }) {
   const { href, active } = useNav();
   return (
     <nav className="flex gap-1 overflow-x-auto border-b bg-card px-2 py-1 md:hidden" aria-label="Main navigation">
-      {NAV.filter((n) => !n.adminOnly || role === "admin").map((n) => (
+      {visibleNav(role, chatEnabled).map((n) => (
         <Link key={n.href} href={href(n.href)} aria-current={active(n.href) ? "page" : undefined} className={cn("whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium", active(n.href) ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>
           {n.label}
         </Link>

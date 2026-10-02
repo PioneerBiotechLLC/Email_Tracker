@@ -10,6 +10,7 @@ import { CategoryChip, ExcludedBadge, PriorityChip, StatusBadge } from "@/compon
 import { IgnoreMenu } from "@/components/shared/ignore-menu";
 import { RuleBanner } from "@/components/shared/rule-banner";
 import { getThreadDetail } from "@/lib/data/thread-detail";
+import { chatEnabled } from "@/lib/chat-flag";
 import { CATEGORY_LABEL, formatDateTime, formatMinutes, formatSince, titleCase } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
   const isAdmin = ctx.role === "admin";
   const ownDomains = orgDomains(org);
   const returnTo = `${base}/threads/${thread.id}`;
+  const askHref = (await chatEnabled()) ? `${base}/ask?thread=${thread.id}&q=${encodeURIComponent("What is the current status of this thread, and what is still open?")}` : null;
   const asks = Array.isArray(thread.asks) ? (thread.asks as { from: string; ask: string; due: string | null }[]) : [];
   const keyPoints = Array.isArray(thread.keyPoints) ? (thread.keyPoints as string[]) : [];
   // Other mailboxes of the company that hold copies of these emails (we were Cc'd, or they were)
@@ -41,6 +43,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <Link href={`${base}/threads`} className="text-sm text-muted-foreground hover:underline">← Threads</Link>
+        {askHref && <Button asChild variant="outline" size="sm" className="ms-auto"><Link href={askHref}>Ask about this thread</Link></Button>}
       </div>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -93,7 +96,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
           {messages.map((m) => {
             const ours = m.direction === "outbound" || owners.has(m.fromAddress);
             return (
-              <article key={m.id} id={`msg-${m.id}`} className={cn("max-w-[92%] rounded-lg border p-3 text-sm", ours ? "self-end bg-primary/5 border-primary/20" : "self-start bg-card", m.isAutoReply && "opacity-60")}>
+              <article key={m.id} id={`msg-${m.id}`} className={cn("max-w-[92%] scroll-mt-24 rounded-lg border p-3 text-sm target:ring-2 target:ring-primary", ours ? "self-end bg-primary/5 border-primary/20" : "self-start bg-card", m.isAutoReply && "opacity-60")}>
                 <header className="mb-1 flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
                   <span className="font-medium text-foreground" dir="auto">{m.fromName || m.fromAddress}</span>
                   {m.fromName && <span>{m.fromAddress}</span>}

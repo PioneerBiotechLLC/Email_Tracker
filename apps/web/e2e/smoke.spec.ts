@@ -121,6 +121,55 @@ test("quick action: ignore a sender from the tracker, then undo", async ({ page 
   await expect(page.getByTestId("rule-banner")).toHaveCount(0);
 });
 
+test("Ask: the page loads and an answer renders with numbered sources linking to the thread and to Outlook", async ({ page }) => {
+  // The model is not called in smoke tests: the stream the page reads is served from here.
+  const turn = {
+    id: "turn1", question: "What happened to PO 4512?", answerMarkdown: "MedCare sent **PO 4512** for 5,000 bottles [1].\n- Dispatch is expected 12 Oct [2]", found: true, unverified: false, limitHit: null, error: null,
+    model: "claude-sonnet-5-5", costUsd: 0.0147, emailsRead: 8, helpful: null,
+    citations: [
+      { marker: "1", messageId: "msgA", threadId: "threadA", subject: "PO 4512 – Amoxicillin 250mg suspension", from: "MedCare Pharmacies", to: "sales@demo-pharma.example", date: "2026-09-30 10:00", mailbox: "sales@demo-pharma.example", webLink: "https://outlook.office365.com/owa/?ItemID=abc" },
+      { marker: "2", messageId: "msgB", threadId: "threadA", subject: "RE: PO 4512 – Amoxicillin 250mg suspension", from: "Sales", to: "purchasing@medcare-pharmacies.sa", date: "2026-10-01 09:00", mailbox: "sales@demo-pharma.example", webLink: null },
+    ],
+  };
+  await page.route("**/ask/stream", (route) => route.fulfill({ contentType: "application/x-ndjson", body: [{ type: "status", text: "Searching emails…" }, { type: "answer", sessionId: "sessionA", turn }].map((e) => JSON.stringify(e)).join("\n") + "\n" }));
+  await page.goto(`${C}/ask`);
+  await expect(page.getByRole("heading", { name: "Ask" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Ask", exact: true })).toHaveAttribute("aria-current", "page"); // sidebar entry
+  await expect(page.getByLabel("Deep answer")).not.toBeChecked();
+  await page.getByLabel("Your question").fill("What happened to PO 4512?");
+  await page.getByLabel("Your question").press("Enter");
+  const answer = page.getByTestId("ask-turn");
+  await expect(answer).toContainText("MedCare sent PO 4512 for 5,000 bottles");
+  await expect(answer.getByRole("link", { name: "Source 1" })).toHaveAttribute("href", "#src-turn1-1");
+  const sources = answer.getByTestId("ask-source");
+  await expect(sources).toHaveCount(2);
+  await expect(sources.first()).toContainText("MedCare Pharmacies → sales@demo-pharma.example · PO 4512");
+  await expect(sources.first().getByRole("link", { name: "Open thread" })).toHaveAttribute("href", `${C}/threads/threadA#msg-msgA`);
+  await expect(sources.first().getByRole("link", { name: /Open in Outlook/ })).toHaveAttribute("href", "https://outlook.office365.com/owa/?ItemID=abc");
+  await expect(sources.nth(1).getByRole("link", { name: /Open in Outlook/ })).toHaveCount(0); // no link stored for that email
+  await expect(answer).toContainText("claude-sonnet-5-5");
+  await expect(answer).toContainText("$0.015");
+  await expect(answer).toContainText("8 emails read");
+  await expect(answer.getByRole("button", { name: "Copy answer" })).toBeVisible();
+  // "Ask about this thread" on a thread page prefills the question and limits it to that thread.
+  await page.goto(`${C}/threads?range=90d&q=PO+4512`);
+  await page.getByTestId("thread-list").getByRole("link", { name: /PO 4512 – Amoxicillin/ }).click();
+  await page.getByRole("link", { name: "Ask about this thread" }).click();
+  await expect(page.getByLabel("Your question")).toHaveValue(/current status of this thread/);
+  await expect(page.getByText("Limited to the thread:")).toContainText("PO 4512 – Amoxicillin");
+});
+
+test("Ask is off without CHAT_ENABLED: no menu entry, and the page and its stream return 404", async ({ page, context, baseURL }) => {
+  await context.addCookies([{ name: "e2e-chat", value: "off", url: baseURL! }]); // test-only switch, see lib/chat-flag.ts
+  const res = await page.goto(`${C}/ask`);
+  expect(res?.status()).toBe(404);
+  const stream = await context.request.post(`${C}/ask/stream`, { data: { question: "anything" } });
+  expect(stream.status()).toBe(404);
+  await page.goto(C);
+  await expect(page.getByRole("link", { name: "Overview" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Ask", exact: true })).toHaveCount(0);
+});
+
 test("company switcher lists the user's companies and Companies is owner-only", async ({ page }) => {
   await page.goto(C);
   await page.getByRole("button", { name: "Switch company" }).click();
