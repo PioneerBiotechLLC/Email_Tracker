@@ -16,6 +16,8 @@ export interface UsageReport {
   total: UsageRow;
   byDay: UsageRow[];
   byModel: UsageRow[];
+  /** summary | period_summary | chat */
+  byPurpose: UsageRow[];
 }
 
 function add(row: UsageRow, r: { error: string | null; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number }) {
@@ -37,6 +39,7 @@ export async function usageReport(days: number, orgId?: string): Promise<UsageRe
   const total = blank("total");
   const byDay = new Map<string, UsageRow>();
   const byModel = new Map<string, UsageRow>();
+  const byPurpose = new Map<string, UsageRow>();
   for (const r of rows) {
     add(total, r);
     const day = r.createdAt.toISOString().slice(0, 10);
@@ -45,6 +48,8 @@ export async function usageReport(days: number, orgId?: string): Promise<UsageRe
     const mk = r.batch ? `${r.model} (batch)` : r.model;
     if (!byModel.has(mk)) byModel.set(mk, blank(mk));
     add(byModel.get(mk)!, r);
+    if (!byPurpose.has(r.purpose)) byPurpose.set(r.purpose, blank(r.purpose));
+    add(byPurpose.get(r.purpose)!, r);
   }
-  return { since, total, byDay: [...byDay.values()], byModel: [...byModel.values()] };
+  return { since, total, byDay: [...byDay.values()], byModel: [...byModel.values()], byPurpose: [...byPurpose.values()] };
 }

@@ -4,7 +4,7 @@ export interface AuditEntry {
   orgId: string;
   userEmail: string;
   action: string;
-  targetType: "thread" | "organization" | "mailbox" | "user" | "exclusion_rule";
+  targetType: "thread" | "organization" | "mailbox" | "user" | "exclusion_rule" | "chat";
   targetId: string;
   before?: unknown;
   after?: unknown;

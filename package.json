@@ -32,7 +32,10 @@
     "org:seed-pioneer": "pnpm --filter @email-tracker/core seed-orgs pioneer",
     "org:seed-api-pharma": "pnpm --filter @email-tracker/core seed-orgs api-pharma",
     "rules:seed-defaults": "pnpm --filter @email-tracker/worker rules seed-defaults",
-    "rules:reapply": "pnpm --filter @email-tracker/worker rules reapply"
+    "rules:reapply": "pnpm --filter @email-tracker/worker rules reapply",
+    "search:reindex": "pnpm --filter @email-tracker/worker search-index reindex",
+    "search:backfill-links": "pnpm --filter @email-tracker/worker search-index backfill-links",
+    "ask:eval": "pnpm --filter @email-tracker/worker ask eval"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

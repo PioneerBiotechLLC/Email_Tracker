@@ -10,7 +10,9 @@
     "replies": "tsx src/cli/replies.ts",
     "ai": "tsx src/cli/ai.ts",
     "user": "tsx src/cli/user.ts",
-    "rules": "tsx src/cli/rules.ts"
+    "rules": "tsx src/cli/rules.ts",
+    "ask": "tsx src/cli/ask.ts",
+    "search-index": "tsx src/cli/search.ts"
   },
   "dependencies": {
     "@email-tracker/core": "workspace:*",

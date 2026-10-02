@@ -56,7 +56,7 @@ const NOT_EXCLUDED: Exclusion = { excludedBy: null, exclusionAction: null };
 const lower = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
 /** Subjects are capped before regex matching so a slow pattern cannot stall a sync. */
 const SUBJECT_MATCH_CHARS = 500;
-export const RULE_VALUE_MAX = 200;
+const RULE_VALUE_MAX = 200;
 
 /** Stored form of a rule value: trimmed; addresses and domains lower-cased, domains without "@" / "*." prefixes. */
 export function normalizeRuleValue(type: RuleType, value: string): string {

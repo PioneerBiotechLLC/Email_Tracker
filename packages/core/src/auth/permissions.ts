@@ -22,7 +22,9 @@ export type Action =
   | "mailbox.toggle"
   | "rules.manage"
   /** Generate a daily/weekly/monthly AI digest (any member; costs one AI call) */
-  | "summary.generate";
+  | "summary.generate"
+  /** Ask a question in the chat (any member; scoped to the company's mailboxes) */
+  | "chat.ask";
 
 const ADMIN_ONLY: ReadonlySet<Action> = new Set<Action>([
   "thread.close", "thread.reopen", "thread.needsReply", "thread.resummarize", "thread.classify", "settings.edit", "users.manage", "mailbox.toggle", "rules.manage",

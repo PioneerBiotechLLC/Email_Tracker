@@ -6,6 +6,7 @@ import { createLogger } from "../log.js";
 import { localParts, zonedTimeToUtc } from "../sync/business-hours.js";
 import { effectiveTime } from "../sync/replies.js";
 import { recomputeThread } from "../sync/threads.js";
+import { writeThreadVectors } from "../ask/search-index.js";
 import { getAnthropic, supportsEffort } from "./client.js";
 import { estimateCostUsd, type TokenUsage } from "./pricing.js";
 import { buildThreadInput, systemPrompt, userMessage, type InputMessage, type SummaryLanguage } from "./prompts.js";
@@ -212,14 +213,21 @@ export interface UsageRecordInput extends TokenUsage {
   error: string | null;
 }
 
-export async function recordUsage(db: PrismaClient, orgId: string, threadId: string | null, records: UsageRecordInput[]): Promise<number> {
+export interface UsageMeta {
+  /** what the calls were for; defaults to "summary" */
+  purpose?: "summary" | "period_summary" | "chat";
+  /** dashboard user who triggered them */
+  userId?: string;
+}
+
+export async function recordUsage(db: PrismaClient, orgId: string, threadId: string | null, records: UsageRecordInput[], meta: UsageMeta = {}): Promise<number> {
   if (!records.length) return 0;
   let total = 0;
   await db.aiUsage.createMany({
     data: records.map((r) => {
       const costUsd = estimateCostUsd(r.model, r, r.batch);
       total += costUsd;
-      return { orgId, threadId, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens, cacheReadTokens: r.cacheReadTokens, cacheWriteTokens: r.cacheWriteTokens, costUsd, batch: r.batch, error: r.error };
+      return { orgId, threadId, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens, cacheReadTokens: r.cacheReadTokens, cacheWriteTokens: r.cacheWriteTokens, costUsd, batch: r.batch, error: r.error, ...meta };
     }),
   });
   return total;
@@ -256,6 +264,7 @@ export async function applySummaryToThread(db: PrismaClient, threadId: string, s
     status = "closed";
   }
   await propagateSummaryToDuplicates(db, threadId, now);
+  await writeThreadVectors(db, [threadId]);
   return { status };
 }
 

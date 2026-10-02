@@ -27,6 +27,8 @@ export interface RawMessage {
   /** PidTagLastVerbExecuted (102 reply, 103 reply-all, 104 forward) */
   lastVerb: number | null;
   lastVerbAt: Date | null;
+  /** Link that opens the message in Outlook on the web */
+  webLink: string | null;
   /** Outlook Focused Inbox classification ("focused" | "other") when the provider has one */
   inferenceClassification: string | null;
 }
@@ -74,6 +76,8 @@ export interface MailProvider {
   resolveUser(emailOrUpn: string): Promise<MailUser>;
   listChanges(opts: ListChangesOptions): AsyncGenerator<DeltaPage, ListChangesResult, void>;
   getMessages(userId: string, ids: string[]): Promise<RawMessage[]>;
+  /** Outlook web links for messages synced before links were stored; null = the message no longer exists in the mailbox. */
+  getWebLinks(userId: string, ids: string[]): Promise<Map<string, string | null>>;
   subscribe(userId: string, notificationUrl: string, clientState: string, lifecycleNotificationUrl?: string): Promise<SubscriptionInfo>;
   renew(subscriptionId: string): Promise<SubscriptionInfo>;
 }

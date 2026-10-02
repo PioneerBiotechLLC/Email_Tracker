@@ -15,12 +15,9 @@ export { cleanBody, htmlToText, stripQuotedHistory, stripSignature, tidyWhitespa
 export { syncMailbox, syncMailboxLocked, acquireSyncLock, releaseSyncLock, type SyncOptions, type SyncStats } from "./sync/sync-mailbox.js";
 export { recomputeThread, recomputeMailboxThreads, recomputeSiblingThreads, businessHoursFor, slaHoursFor, ownerAddresses, type RecomputeResult } from "./sync/threads.js";
 export { orgDomains, domainOf, internalRecipients, copyRank, pickPrimary, assignPrimaries, dedupeMessageIds, dedupeOrgMessages, threadRefKey, type MessageCopy, type ThreadRef, type DedupeOrgResult } from "./sync/dedupe.js";
-export {
-  RULE_TYPES, EXCLUSION_ACTIONS, RULE_VALUE_MAX, normalizeRuleValue, ruleValueError, matchesRule, orderRules, headerSignals, isNoReplySender, autoSignal, evaluateExclusion, threadExclusion, exclusionReason, listVisibility, COUNTED,
-  type RuleType, type ExclusionAction, type RuleLike, type ExclusionInput, type ExclusionSettings, type Exclusion,
-} from "./sync/exclusions.js";
-export { loadExclusionContext, reapplyExclusions, countRuleMatches, seedDefaultRules, DEFAULT_EXCLUSION_RULES, type ExclusionContext, type ReapplyResult, type RuleDraft } from "./sync/exclusion-rules.js";
-export { orgSettings, type OrgSettings } from "./org-settings.js";
+export { RULE_TYPES, EXCLUSION_ACTIONS, normalizeRuleValue, ruleValueError, exclusionReason, listVisibility, COUNTED } from "./sync/exclusions.js";
+export { reapplyExclusions, countRuleMatches, seedDefaultRules, DEFAULT_EXCLUSION_RULES, type ReapplyResult } from "./sync/exclusion-rules.js";
+export { orgSettings } from "./org-settings.js";
 export {
   detectReplies, computeThreadStatus, effectiveTime, isFromUs, isRealInbound, isRealOutbound, REPLY_VERBS, FORWARD_VERB,
   type ReplyInputMessage, type ReplyResult, type DetectOptions, type ThreadState, type StatusOptions, type StatusResult,
@@ -41,6 +38,9 @@ export {
   PERIOD_SUMMARY_TOOL, PERIOD_SUMMARY_TOOL_NAME, PeriodSummarySchema, DEFAULT_PERIOD_TOKEN_BUDGET,
   type SummaryPeriodKey, type PeriodRange, type PeriodThread, type PeriodStats, type PeriodActivity, type PeriodSummaryOutput, type PeriodSummaryRecord, type SummarizePeriodResult, type SummarizePeriodOptions,
 } from "./ai/period-summary.js";
+export { reindexOrg, searchIndexSize } from "./ask/search-index.js";
+export { backfillWebLinks } from "./ask/web-links.js";
+export { answerQuestion, DEFAULT_ASK_LIMITS, MAX_TURNS_PER_SESSION, type SourceCitation } from "./ask/answer.js";
 export { planBackfill, runBackfill, EST_OUTPUT_TOKENS, type BackfillPlan, type RunResult } from "./ai/backfill.js";
 export { usageReport, type UsageReport, type UsageRow } from "./ai/usage.js";
 export { can, assertCan, assertSameOrg, mailboxScope, ForbiddenError, type Role, type Action, type SessionContext } from "./auth/permissions.js";

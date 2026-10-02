@@ -111,9 +111,9 @@ describe("built-in detection", () => {
   });
   it("can be turned off per company; settings default to on", () => {
     expect(evaluateExclusion(msg({ autoSignals: ["list-id"], fromAddress: "noreply@x.com", inferenceClassification: "other" }), [], OFF)).toEqual({ excludedBy: null, exclusionAction: null });
-    expect(orgSettings({})).toEqual(ON);
-    expect(orgSettings(null)).toEqual(ON);
-    expect(orgSettings({ autoExclude: false, outlookOtherNoReply: "yes" })).toEqual({ autoExclude: false, outlookOtherNoReply: true });
+    expect(orgSettings({})).toMatchObject(ON);
+    expect(orgSettings(null)).toMatchObject(ON);
+    expect(orgSettings({ autoExclude: false, outlookOtherNoReply: "yes" })).toMatchObject({ autoExclude: false, outlookOtherNoReply: true });
   });
 });
 

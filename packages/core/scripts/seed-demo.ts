@@ -4,7 +4,7 @@
  *   pnpm db:seed-demo            create / refresh
  *   pnpm db:seed-demo --remove   delete the demo org and everything under it
  */
-import { getDb, disconnectDb, protectBody, recomputeThread, recomputeMailboxThreads, dedupeOrgMessages, normalizeSubject, reapplyExclusions, seedDefaultRules } from "../src/index.js";
+import { getDb, disconnectDb, protectBody, recomputeThread, recomputeMailboxThreads, dedupeOrgMessages, normalizeSubject, reapplyExclusions, reindexOrg, seedDefaultRules } from "../src/index.js";
 
 const DOMAIN = "demo-pharma.example";
 const MAILBOXES = ["sales@demo-pharma.example", "regulatory@demo-pharma.example"];
@@ -255,6 +255,8 @@ async function seed() {
   // Default exclusion rules + built-in detection, applied the way a rule change applies them to stored mail.
   await seedDefaultRules(db, org.id);
   const excluded = await reapplyExclusions(db, org.id);
+  // Search index for the Ask chat (the sync writes it for real mail).
+  await reindexOrg(db, org.id, true, { all: true });
   // A little AI usage history for the settings page
   const usage = [];
   for (let d = 0; d < 14; d++) for (let c = 0; c < 3 + Math.floor(rnd() * 6); c++) usage.push({ orgId: org.id, model: rnd() > 0.3 ? "claude-sonnet-5-5" : "claude-haiku-4-5", inputTokens: 900 + Math.floor(rnd() * 2000), outputTokens: 250 + Math.floor(rnd() * 300), cacheReadTokens: 900, cacheWriteTokens: 0, costUsd: 0.004 + rnd() * 0.006, batch: rnd() > 0.5, createdAt: hoursAgo(d * 24 + rnd() * 20) });

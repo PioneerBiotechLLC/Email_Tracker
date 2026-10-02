@@ -27,6 +27,11 @@ const schema = z.object({
   AI_MAX_CALLS_PER_DAY: z.coerce.number().int().positive().default(500),
   /** Wait this long after the last message before summarizing (bursts → one call) */
   AI_SUMMARY_DEBOUNCE_MINUTES: z.coerce.number().min(0).default(2),
+  /** Model that answers "Ask" questions, and the one used when the user ticks "Deep answer" */
+  ANTHROPIC_CHAT_MODEL: z.string().default("claude-sonnet-5-5"),
+  ANTHROPIC_CHAT_DEEP_MODEL: z.string().default("claude-opus-5-5"),
+  /** Questions one user may ask per day (each question also counts toward AI_MAX_CALLS_PER_DAY) */
+  AI_CHAT_MAX_QUESTIONS_PER_USER_PER_DAY: z.coerce.number().int().positive().default(50),
   /** Reasoning effort for models that support it (low keeps summaries cheap) */
   AI_EFFORT: z.enum(["low", "medium", "high"]).default("low"),
   BACKFILL_DAYS: z.coerce.number().int().positive().default(90),

@@ -38,6 +38,7 @@ const SELECT_FIELDS = [
   "parentFolderId",
   "internetMessageHeaders",
   "inferenceClassification",
+  "webLink",
 ];
 
 const EXT_PROPS_FILTER = "id eq 'Integer 0x1081' or id eq 'SystemTime 0x1082'";
@@ -69,6 +70,7 @@ interface GraphMessage {
   isDraft?: boolean;
   internetMessageHeaders?: RawHeader[];
   inferenceClassification?: string;
+  webLink?: string;
   singleValueExtendedProperties?: GraphExtProp[];
 }
 interface DeltaResponse {
@@ -127,6 +129,7 @@ export function toRawMessage(m: GraphMessage): RawMessage {
     lastVerb: ext.lastVerb,
     lastVerbAt: ext.lastVerbAt,
     inferenceClassification: m.inferenceClassification?.toLowerCase() ?? null,
+    webLink: m.webLink ?? null,
   };
 }
 
@@ -283,6 +286,20 @@ export class GraphProvider implements MailProvider {
       const r = responses.get(String(i));
       if (r && r.status < 300 && r.body) out.push(toRawMessage(r.body as GraphMessage));
       else if (r?.status !== 404) log.warn("getMessages item failed", { status: r?.status });
+    }
+    return out;
+  }
+
+  /** `webLink` only, via $batch (20 per request, throttling handled by graphBatch). Ids that failed for another reason than 404 are left out so a later run retries them. */
+  async getWebLinks(userId: string, ids: string[]): Promise<Map<string, string | null>> {
+    const requests = ids.map((id, i) => ({ id: String(i), method: "GET" as const, url: `/users/${userId}/messages/${id}?$select=id,webLink`, headers: { Prefer: 'IdType="ImmutableId"' } }));
+    const responses = await graphBatch(this.client, requests);
+    const out = new Map<string, string | null>();
+    for (let i = 0; i < ids.length; i++) {
+      const r = responses.get(String(i));
+      if (r && r.status < 300) out.set(ids[i]!, (r.body as GraphMessage).webLink ?? null);
+      else if (r?.status === 404) out.set(ids[i]!, null);
+      else log.warn("webLink lookup failed for message", { status: r?.status });
     }
     return out;
   }

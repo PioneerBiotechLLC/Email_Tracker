@@ -15,12 +15,12 @@ function msg(p: Partial<RawMessage> & { id: string; receivedAt: Date; subject: s
   return {
     changeKey: null, conversationId: "conv-1", internetMessageId: `<${p.id}@x>`, from: { address: "ali@customer.com", name: "Ali" },
     to: [{ address: OWNER, name: "Sales" }], cc: [], sentAt: p.receivedAt, bodyPreview: p.subject, body: { contentType: "text", content: "hello" },
-    hasAttachments: false, importance: "normal", isDraft: false, headers: null, lastVerb: null, lastVerbAt: null, inferenceClassification: null, ...p,
+    hasAttachments: false, importance: "normal", isDraft: false, headers: null, lastVerb: null, lastVerbAt: null, inferenceClassification: null, webLink: null, ...p,
   };
 }
 
 const inbox: RawMessage[] = [
-  msg({ id: "m1", subject: "PO 4512 – Paracetamol", receivedAt: d("2026-09-01T08:00:00Z"), cc: [{ address: REG, name: "Regulatory" }],
+  msg({ id: "m1", subject: "PO 4512 – Paracetamol", receivedAt: d("2026-09-01T08:00:00Z"), cc: [{ address: REG, name: "Regulatory" }], webLink: "https://outlook.office365.com/owa/?ItemID=m1",
     body: { contentType: "html", content: "<p>Please quote 500 units.</p><br>Best regards,<br>Ali" }, lastVerb: 102, lastVerbAt: d("2026-09-01T10:05:00Z") }),
   msg({ id: "m3", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-02T09:00:00Z"),
     body: { contentType: "text", content: "Thanks, confirmed.\n\nOn Mon, Sales wrote:\n> Quote attached" },
@@ -54,6 +54,7 @@ class FakeProvider implements MailProvider {
     return { deltaLink: `delta:${opts.folder}` };
   }
   async getMessages(): Promise<RawMessage[]> { return []; }
+  async getWebLinks(): Promise<Map<string, string | null>> { return new Map(); }
   async subscribe(): Promise<SubscriptionInfo> { throw new Error("n/a"); }
   async renew(): Promise<SubscriptionInfo> { throw new Error("n/a"); }
 }
@@ -83,6 +84,10 @@ try {
   assert(m3.references.length === 2, "m3 references parsed");
   const m4 = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m4" } });
   assert(m4.isAutoReply, "m4 flagged auto-reply");
+  // Search index (Ask): written by the sync from the plaintext, one statement per page; Outlook link stored.
+  const vectors = await db.$queryRaw<{ gid: string; hit: boolean }[]>`SELECT "graphMessageId" AS gid, "searchVector" @@ to_tsquery('simple', 'quote & 500 & units & ali & 4512') AS hit FROM "Message" WHERE "mailboxId" = ${mb.id} AND "searchVector" IS NOT NULL`;
+  assert(vectors.length === 4 && vectors.find((v) => v.gid === "m1")?.hit === true && vectors.filter((v) => v.hit).length === 1, "every synced message has a search vector built from subject, sender and cleaned body");
+  assert(m1.webLink === "https://outlook.office365.com/owa/?ItemID=m1" && m2.webLink === null, "Outlook web link stored when Graph returns one");
 
   const t1 = await db.thread.findUniqueOrThrow({ where: { mailboxId_conversationId: { mailboxId: mb.id, conversationId: "conv-1" } } });
   assert(t1.messageCount === 3 && t1.normalizedSubject === "po 4512 – paracetamol", `thread grouped: ${t1.messageCount} msgs, "${t1.normalizedSubject}"`);

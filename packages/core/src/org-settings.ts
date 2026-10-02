@@ -6,10 +6,10 @@ const schema = z.object({
   autoExclude: z.boolean().catch(true),
   /** Treat mail that Outlook's Focused Inbox files under "Other" as no_reply_needed */
   outlookOtherNoReply: z.boolean().catch(true),
+  /** Index words from email bodies for search; false = subject and participants only */
+  searchIndexBodies: z.boolean().catch(true),
 });
 
-export type OrgSettings = z.infer<typeof schema>;
-
-export function orgSettings(json: unknown): OrgSettings {
+export function orgSettings(json: unknown): z.infer<typeof schema> {
   return schema.parse(json && typeof json === "object" && !Array.isArray(json) ? json : {});
 }

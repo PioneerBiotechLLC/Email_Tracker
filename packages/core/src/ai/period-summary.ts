@@ -430,7 +430,7 @@ export async function summarizePeriod(opts: SummarizePeriodOptions): Promise<Sum
   };
   const client = opts.client ?? getAnthropic();
   const { summary, error, calls } = await callPeriodSummary(client, req, env.AI_EFFORT);
-  const costUsd = await recordUsage(db, org.id, null, calls.map((c) => ({ ...c.usage, model: c.model, batch: false, error: c.error })));
+  const costUsd = await recordUsage(db, org.id, null, calls.map((c) => ({ ...c.usage, model: c.model, batch: false, error: c.error })), { purpose: "period_summary" });
   log.debug("period summary call", { org: org.domain, scope, period: opts.period, attempts: calls.length, inputTokensEst: input.estimatedTokens, error });
   if (!summary) {
     log.warn("period summary failed", { org: org.domain, scope, period: opts.period, error });

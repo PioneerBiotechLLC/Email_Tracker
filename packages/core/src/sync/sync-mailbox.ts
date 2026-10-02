@@ -1,3 +1,4 @@
+import { messageSearchText, writeMessageVectors } from "../ask/search-index.js";
 import { getDb, type Mailbox, type PrismaClient, type Prisma } from "../db.js";
 import { protectBody } from "../crypto.js";
 import { getEnv } from "../env.js";
@@ -7,6 +8,7 @@ import { extractReplyHeaders, normalizeMessageId } from "../mail/headers.js";
 import type { MailProvider, RawMessage, SyncFolder } from "../mail/provider.js";
 import { normalizeSubject } from "../mail/subject.js";
 import { cleanBody } from "../mail/text.js";
+import { orgSettings } from "../org-settings.js";
 import { dedupeMessageIds, internalRecipients, orgDomains, threadRefKey, type ThreadRef } from "./dedupe.js";
 import { loadExclusionContext, type ExclusionContext } from "./exclusion-rules.js";
 import { evaluateExclusion, headerSignals } from "./exclusions.js";
@@ -46,12 +48,14 @@ interface UpsertContext {
   /** the company's email domains, for internal-recipient detection */
   domains: Set<string>;
   previewOnly: boolean;
+  /** index words from email bodies for search (company setting); otherwise subject + participants only */
+  indexBodies: boolean;
   /** the company's exclusion rules and detection settings, loaded once per sync */
   exclusions: ExclusionContext;
 }
 
-/** Upserts one Graph message (and its thread shell). Returns the conversation id and Message-ID touched. */
-async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFolder, raw: RawMessage, ctx: UpsertContext): Promise<{ conversationId: string; internetMessageId: string | null }> {
+/** Upserts one Graph message (and its thread shell). Returns the conversation id and Message-ID touched, and the text for the search index. */
+async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFolder, raw: RawMessage, ctx: UpsertContext): Promise<{ conversationId: string; internetMessageId: string | null; searchText: string }> {
   const { owners, previewOnly } = ctx;
   const conversationId = raw.conversationId ?? `noconv:${raw.id}`;
   const fromAddress = raw.from?.address ?? "";
@@ -112,6 +116,7 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
     // Colleagues (addresses in the company's domains) who also got this email
     internalRecipients: internalRecipients({ to: raw.to, cc: raw.cc }, ctx.domains, owners),
     inferenceClassification: raw.inferenceClassification,
+    webLink: raw.webLink,
     autoSignals,
     ...exclusion,
   };
@@ -121,7 +126,9 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
     create: { graphMessageId: raw.id, ...data },
     update: data,
   });
-  return { conversationId, internetMessageId };
+  // The search index is built from plaintext here because the stored body may be encrypted (or not stored at all).
+  const indexedBody = !ctx.indexBodies ? null : previewOnly ? raw.bodyPreview : body;
+  return { conversationId, internetMessageId, searchText: messageSearchText({ subject: raw.subject, fromName: raw.from?.name ?? null, fromAddress, to: raw.to, cc: raw.cc, body: indexedBody }) };
 }
 
 /**
@@ -165,7 +172,7 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
     partial: false,
     durationMs: 0,
   };
-  const ctx: UpsertContext = { owners, domains: orgDomains(mailbox.org), previewOnly: mailbox.org.bodyStorage === "preview_only", exclusions: await loadExclusionContext(db, mailbox.orgId) };
+  const ctx: UpsertContext = { owners, domains: orgDomains(mailbox.org), previewOnly: mailbox.org.bodyStorage === "preview_only", indexBodies: orgSettings(mailbox.org.settings).searchIndexBodies, exclusions: await loadExclusionContext(db, mailbox.orgId) };
 
   for (const folder of FOLDERS) {
     if (stats.partial) break;
@@ -194,6 +201,7 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
       fstats.pages += 1;
       fstats.removed += page.removedIds.length;
       const messageIds: string[] = [];
+      const vectors: { key: string; text: string }[] = [];
       for (const raw of page.messages) {
         if (raw.isDraft) {
           fstats.skippedDrafts += 1;
@@ -202,8 +210,11 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
         const r = await upsertMessage(db, mailbox, folder, raw, ctx);
         touched.add(r.conversationId);
         if (r.internetMessageId) messageIds.push(r.internetMessageId);
+        vectors.push({ key: raw.id, text: r.searchText });
         fstats.upserted += 1;
       }
+      // One statement per page for the search index (Prisma cannot write tsvector columns in the upsert itself).
+      await writeMessageVectors(db, "graphMessageId", vectors);
       // The same email may already be tracked in another mailbox of the company (we were Cc'd): link the copies.
       const dedupe = await dedupeMessageIds(db, mailbox.orgId, messageIds);
       stats.duplicates += dedupe.duplicates;
