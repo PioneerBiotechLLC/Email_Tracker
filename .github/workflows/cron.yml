@@ -10,10 +10,17 @@ jobs:
   sync-and-summarize:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      APP_URL: ${{ secrets.APP_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
     steps:
+      - name: Check secrets
+        run: |
+          [ -n "$APP_URL" ] || { echo "::error::Repository secret APP_URL is not set (Settings > Secrets and variables > Actions)"; exit 1; }
+          [ -n "$CRON_SECRET" ] || { echo "::error::Repository secret CRON_SECRET is not set (Settings > Secrets and variables > Actions)"; exit 1; }
       - name: Sync mailboxes (safety net)
         run: |
-          curl -sS --fail-with-body --max-time 90 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ secrets.APP_URL }}/api/cron/sync"
+          curl -sS --fail-with-body --max-time 90 -H "Authorization: Bearer $CRON_SECRET" "${APP_URL%/}/api/cron/sync"
       - name: Summarize threads
         run: |
-          curl -sS --fail-with-body --max-time 90 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ secrets.APP_URL }}/api/cron/summarize"
+          curl -sS --fail-with-body --max-time 90 -H "Authorization: Bearer $CRON_SECRET" "${APP_URL%/}/api/cron/summarize"
