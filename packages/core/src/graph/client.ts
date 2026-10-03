@@ -47,8 +47,20 @@ function retryAfterMs(err: unknown): number | null {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * The connection itself failed (reset, timeout, DNS hiccup): Node's fetch throws
+ * `TypeError("fetch failed")` with the real reason in `cause`, and there is no HTTP status.
+ */
+export function networkErrorReason(err: unknown): string | null {
+  if (!(err instanceof Error) || graphStatus(err) !== undefined) return null;
+  const cause = err.cause as { code?: string; message?: string } | undefined;
+  if (err.message === "fetch failed" || cause?.code) return cause?.code ?? cause?.message ?? err.message;
+  return null;
+}
+
+/**
  * Extra retry layer on top of the SDK middleware: honours Retry-After on
- * 429/503/504 and falls back to exponential backoff with jitter.
+ * 429/502/503/504, retries dropped connections, and otherwise backs off
+ * exponentially with jitter.
  */
 export async function withGraphRetry<T>(label: string, fn: () => Promise<T>, maxAttempts = 6): Promise<T> {
   let attempt = 0;
@@ -57,11 +69,12 @@ export async function withGraphRetry<T>(label: string, fn: () => Promise<T>, max
       return await fn();
     } catch (err) {
       const status = graphStatus(err);
-      const retryable = status === 429 || status === 503 || status === 504 || status === 502;
+      const network = networkErrorReason(err);
+      const retryable = status === 429 || status === 503 || status === 504 || status === 502 || network !== null;
       attempt += 1;
       if (!retryable || attempt >= maxAttempts) throw err;
       const delay = retryAfterMs(err) ?? Math.min(60_000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 500);
-      log.warn(`throttled on ${label}; retrying`, { status, attempt, delayMs: delay });
+      log.warn(network ? `connection failed on ${label}; retrying` : `throttled on ${label}; retrying`, { status, reason: network ?? undefined, attempt, delayMs: delay });
       await sleep(delay);
     }
   }

@@ -58,6 +58,8 @@ program
   .parseAsync(process.argv)
   .catch((err) => {
     console.error(err instanceof Error ? (process.env.LOG_LEVEL === "debug" ? err.stack : err.message) : err);
+    // "fetch failed" alone says nothing; the network reason (ECONNRESET, ETIMEDOUT, …) is in `cause`.
+    if (err instanceof Error && err.cause) console.error("Cause:", err.cause instanceof Error ? err.cause.message : err.cause);
     console.error(dbHint());
     process.exitCode = 1;
   })
