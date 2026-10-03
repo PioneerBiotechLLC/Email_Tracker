@@ -269,6 +269,19 @@ pnpm db:deploy
 pnpm replies:recompute all      # re-links copies, fills internalRecipients, recomputes every thread
 ```
 
+### Mailboxes migrated from another provider (sent mail in a plain folder)
+
+The sync reads Inbox and Sent Items only. After a migration (e.g. Zoho → Microsoft 365 over IMAP) the old sent mail often sits in a plain folder called "Sent", "Sent Emails" or "Emails Sent", so replies in it would not count and those customers would look unanswered. Import those folders once:
+
+```bash
+pnpm folders:list sales@<company-domain>                 # all folders + item counts; "<- will import" marks detected sent folders
+pnpm folders:import all --org <company> --dry-run        # what would be imported
+pnpm folders:import all --org <company>                  # last BACKFILL_DAYS days (by sent date) stored as sent mail
+pnpm folders:import sales@<company-domain> --folder "Inbox/Old sent"   # a folder the name detection misses
+```
+
+Detected by name (case and punctuation ignored): sent, sent items, sent mail(s), sent email(s), sent messages, email(s) sent, mail sent, and the Arabic equivalents. The real Sent Items folder is recognized by id and never imported twice. Read-only (Mail.Read), safe to re-run, no delta link kept: new sent mail goes to Sent Items as usual.
+
 ### Daily / weekly / monthly summary
 
 The **Summary** page (`/c/<slug>/summary`) shows, for the mailbox chosen in the top bar or for all mailboxes, the figures of a rolling window — **Today**, **Last 7 days**, **Last 30 days** — and a "Generate summary" button. One Claude call (counted against `AI_MAX_CALLS_PER_DAY`) returns a very short digest: a one-line overview and up to five bullets each for *received*, *sent* and *needs attention*. Counts come from the database, only the words come from the model; existing thread summaries feed the prompt so it stays small (least urgent threads are dropped past ~40k tokens). Results are stored in `PeriodSummary`, so the page shows the last digest until someone regenerates it. Any member can generate; the action is audited.
@@ -408,6 +421,8 @@ TEST_DATABASE_URL="postgres://…@localhost:…/…" pnpm test
 | `pnpm mailbox add <email> [--org-name] [--org-domain] [--tenant] [--alias …]` | register a mailbox |
 | `pnpm mailbox list` / `pause <email>` / `resume <email>` | manage mailboxes |
 | `pnpm sync:once <email\|all> [--reset] [--days N] [--no-ai]` | backfill / incremental sync, then AI summaries for touched threads |
+| `pnpm folders:list <email\|all> [--org <slug>]` | every mail folder with item counts; marks extra sent folders (read-only) |
+| `pnpm folders:import <email\|all> [--org <slug>] [--folder <name...>] [--days N] [--dry-run]` | load extra sent folders (e.g. "Sent" left by a Zoho migration) as sent mail so replies in them count |
 | `pnpm replies:recompute <email\|all> [--no-dedupe]` | re-link copies across mailboxes + internal recipients, then re-run reply detection + thread status for every thread |
 | `pnpm replies:report <email> [--days 30]` | reply stats + oldest unanswered emails, for spot-checking against Outlook |
 | `pnpm rules:seed-defaults [--org <slug>] [--no-apply]` | add the default exclusion rules to companies that lack them, then re-apply all rules |

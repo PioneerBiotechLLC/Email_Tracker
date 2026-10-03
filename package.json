@@ -11,6 +11,8 @@
     "db:studio": "pnpm --filter @email-tracker/core db:studio",
     "mailbox": "pnpm --filter @email-tracker/worker mailbox",
     "sync:once": "pnpm --filter @email-tracker/worker sync:once",
+    "folders:list": "pnpm --filter @email-tracker/worker folders list",
+    "folders:import": "pnpm --filter @email-tracker/worker folders import",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
     "replies:recompute": "pnpm --filter @email-tracker/worker replies recompute",

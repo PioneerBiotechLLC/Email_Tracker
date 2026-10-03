@@ -12,7 +12,8 @@
     "user": "tsx src/cli/user.ts",
     "rules": "tsx src/cli/rules.ts",
     "ask": "tsx src/cli/ask.ts",
-    "search-index": "tsx src/cli/search.ts"
+    "search-index": "tsx src/cli/search.ts",
+    "folders": "tsx src/cli/folders.ts"
   },
   "dependencies": {
     "@email-tracker/core": "workspace:*",

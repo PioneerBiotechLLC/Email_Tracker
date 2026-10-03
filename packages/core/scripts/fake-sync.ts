@@ -3,9 +3,9 @@
  * (no Graph credentials needed). Run against any Postgres:
  *   DATABASE_URL=... AZURE_TENANT_ID=t AZURE_CLIENT_ID=c AZURE_CLIENT_SECRET=s pnpm exec tsx scripts/fake-sync.ts
  */
-import { getDb, disconnectDb, syncMailbox, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, summarizePeriod, latestPeriodSummary, mailboxScope, seedDefaultRules, reapplyExclusions, countRuleMatches, collectPeriodActivity, SUMMARY_TOOL_NAME, PERIOD_SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
+import { getDb, disconnectDb, syncMailbox, importSentFolders, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, summarizePeriod, latestPeriodSummary, mailboxScope, seedDefaultRules, reapplyExclusions, countRuleMatches, collectPeriodActivity, SUMMARY_TOOL_NAME, PERIOD_SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { MailProvider, RawMessage, ListChangesOptions, DeltaPage, ListChangesResult, SubscriptionInfo, MailUser } from "../src/mail/provider.js";
+import type { MailProvider, MailboxFolder, RawMessage, ListChangesOptions, DeltaPage, ListChangesResult, SubscriptionInfo, MailUser } from "../src/mail/provider.js";
 
 const OWNER = "sales@example-pharma.com";
 const REG = "regulatory@example-pharma.com";
@@ -54,6 +54,17 @@ class FakeProvider implements MailProvider {
     return { deltaLink: `delta:${opts.folder}` };
   }
   async getMessages(): Promise<RawMessage[]> { return []; }
+  /** A migrated "Sent" folder (Zoho → Microsoft 365) next to the real Sent Items */
+  migratedSent: RawMessage[] = [];
+  async listMailFolders(): Promise<MailboxFolder[]> {
+    return [
+      { id: "f-sentitems", path: "Sent Items", displayName: "Sent Items", totalItemCount: this.sentMessages.length, isSentItems: true },
+      { id: "f-zoho-sent", path: "Sent", displayName: "Sent", totalItemCount: this.migratedSent.length, isSentItems: false },
+    ];
+  }
+  async *listFolderMessages(_userId: string, folderId: string): AsyncGenerator<RawMessage[], void, void> {
+    if (folderId === "f-zoho-sent") yield this.migratedSent;
+  }
   async getWebLinks(): Promise<Map<string, string | null>> { return new Map(); }
   async subscribe(): Promise<SubscriptionInfo> { throw new Error("n/a"); }
   async renew(): Promise<SubscriptionInfo> { throw new Error("n/a"); }
@@ -128,8 +139,18 @@ try {
   assert(t1alias.status === "awaiting_them" && m3alias.replyMethod === "conversation_match", "alias message treated as our reply (conversation match)");
   inbox.pop();
   await db.mailbox.update({ where: { id: mb.id }, data: { aliases: [] } });
+  // Migrated mailbox: the answer to m3 sits in the old provider's "Sent" folder, not in Sent Items.
+  provider.migratedSent = [msg({ id: "m7", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-02T11:00:00Z"), from: { address: OWNER, name: "Sales" },
+    to: [{ address: "ali@customer.com", name: "Ali" }], headers: [{ name: "In-Reply-To", value: "<m3@x>" }] })];
+  const sentFolders = (await provider.listMailFolders()).filter((f) => !f.isSentItems);
+  const imp = await importSentFolders(mb.id, sentFolders, { provider });
+  const m7 = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m7" } });
+  const m3imp = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m3" } });
+  assert(imp.folders[0]?.upserted === 1 && m7.direction === "outbound" && m7.folder === "sent", "migrated Sent folder imported as sent mail");
+  assert(m3imp.repliedByMessageId === m7.id && (await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).status === "awaiting_them", "a reply in the migrated folder answers m3");
+  provider.migratedSent = [];
   // Sync never deletes (read-only mirror), so drop the scenario messages ourselves and recompute.
-  await db.message.deleteMany({ where: { graphMessageId: { in: ["m5", "m6"] } } });
+  await db.message.deleteMany({ where: { graphMessageId: { in: ["m5", "m6", "m7"] } } });
   await recomputeThread(db, mb.id, "conv-1");
   assert((await db.thread.findUniqueOrThrow({ where: { id: t1.id } })).status === "awaiting_us", "recompute after removing scenario messages restores awaiting_us");
 

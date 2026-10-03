@@ -7,6 +7,7 @@ import type {
   DeltaPage,
   ListChangesOptions,
   ListChangesResult,
+  MailboxFolder,
   MailProvider,
   MailUser,
   RawMessage,
@@ -288,6 +289,58 @@ export class GraphProvider implements MailProvider {
       else if (r?.status !== 404) log.warn("getMessages item failed", { status: r?.status });
     }
     return out;
+  }
+
+  async listMailFolders(userId: string): Promise<MailboxFolder[]> {
+    const sentItems = (await withGraphRetry("sentitems", () => this.client.api(`/users/${userId}/mailFolders/sentitems`).select("id").get())) as { id: string };
+    const out: MailboxFolder[] = [];
+    // Breadth-first over the folder tree; migrations usually create folders at the top level or under the Inbox.
+    const queue: { url: string; parent: string }[] = [{ url: `/users/${userId}/mailFolders`, parent: "" }];
+    while (queue.length) {
+      const { url, parent } = queue.shift()!;
+      let next: string | undefined = `${url}?$select=id,displayName,totalItemCount,childFolderCount&$top=100`;
+      while (next) {
+        const pageUrl: string = next;
+        const page = (await withGraphRetry("mailFolders", () => this.client.api(pageUrl).get())) as {
+          value: { id: string; displayName: string; totalItemCount?: number; childFolderCount?: number }[];
+          "@odata.nextLink"?: string;
+        };
+        for (const f of page.value) {
+          const path = parent ? `${parent}/${f.displayName}` : f.displayName;
+          out.push({ id: f.id, path, displayName: f.displayName, totalItemCount: f.totalItemCount ?? 0, isSentItems: f.id === sentItems.id });
+          if (f.childFolderCount) queue.push({ url: `/users/${userId}/mailFolders/${f.id}/childFolders`, parent: path });
+        }
+        next = page["@odata.nextLink"];
+      }
+    }
+    return out;
+  }
+
+  async *listFolderMessages(userId: string, folderId: string, sinceDays: number): AsyncGenerator<RawMessage[], void, void> {
+    const filter = encodeURIComponent(`sentDateTime ge ${isoDaysAgo(sinceDays)}`);
+    const base = `/users/${userId}/mailFolders/${folderId}/messages?$select=${SELECT_FIELDS.join(",")}&$filter=${filter}&$top=50`;
+    let expand = true;
+    let url = `${base}&$expand=${encodeURIComponent(EXPAND_EXT)}`;
+    for (;;) {
+      let page: DeltaResponse;
+      try {
+        page = (await withGraphRetry("folder messages", () => this.client.api(url).header("Prefer", PREFER_HEADER).get())) as DeltaResponse;
+      } catch (err) {
+        // Same fallback as delta: without $expand, the reply flags come from a $batch per page instead.
+        if (expand && graphStatus(err) === 400) {
+          log.warn("folder listing rejected $expand; falling back to $batch enrichment", { code: graphErrorCode(err) });
+          expand = false;
+          url = base;
+          continue;
+        }
+        throw err;
+      }
+      const messages = page.value.map(toRawMessage);
+      yield expand || !messages.length ? messages : await this.enrich(userId, messages);
+      const next = page["@odata.nextLink"];
+      if (!next) return;
+      url = next;
+    }
   }
 
   /** `webLink` only, via $batch (20 per request, throttling handled by graphBatch). Ids that failed for another reason than 404 are left out so a later run retries them. */

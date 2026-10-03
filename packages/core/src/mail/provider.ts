@@ -55,6 +55,16 @@ export interface ListChangesResult {
   deltaLink: string;
 }
 
+export interface MailboxFolder {
+  id: string;
+  /** e.g. "Inbox/Sent" for a folder nested under the Inbox */
+  path: string;
+  displayName: string;
+  totalItemCount: number;
+  /** the mailbox's real Sent Items folder (already synced by listChanges) */
+  isSentItems: boolean;
+}
+
 export interface MailUser {
   id: string;
   displayName: string | null;
@@ -76,6 +86,10 @@ export interface MailProvider {
   resolveUser(emailOrUpn: string): Promise<MailUser>;
   listChanges(opts: ListChangesOptions): AsyncGenerator<DeltaPage, ListChangesResult, void>;
   getMessages(userId: string, ids: string[]): Promise<RawMessage[]>;
+  /** Every mail folder of the mailbox, nested ones included. */
+  listMailFolders(userId: string): Promise<MailboxFolder[]>;
+  /** Messages of one folder sent within the last `sinceDays` days, a page at a time (one-off imports, no delta tracking). */
+  listFolderMessages(userId: string, folderId: string, sinceDays: number): AsyncGenerator<RawMessage[], void, void>;
   /** Outlook web links for messages synced before links were stored; null = the message no longer exists in the mailbox. */
   getWebLinks(userId: string, ids: string[]): Promise<Map<string, string | null>>;
   subscribe(userId: string, notificationUrl: string, clientState: string, lifecycleNotificationUrl?: string): Promise<SubscriptionInfo>;

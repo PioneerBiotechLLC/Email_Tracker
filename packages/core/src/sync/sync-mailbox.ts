@@ -131,6 +131,73 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
   return { conversationId, internetMessageId, searchText: messageSearchText({ subject: raw.subject, fromName: raw.from?.name ?? null, fromAddress, to: raw.to, cc: raw.cc, body: indexedBody }) };
 }
 
+type MailboxWithOrg = Prisma.MailboxGetPayload<{ include: { org: true } }>;
+
+async function upsertContext(db: PrismaClient, mailbox: MailboxWithOrg): Promise<UpsertContext> {
+  return {
+    owners: ownerAddresses(mailbox),
+    domains: orgDomains(mailbox.org),
+    previewOnly: mailbox.org.bodyStorage === "preview_only",
+    indexBodies: orgSettings(mailbox.org.settings).searchIndexBodies,
+    exclusions: await loadExclusionContext(db, mailbox.orgId),
+  };
+}
+
+/** What one sync or import run touched, so threads are recomputed once at the end. */
+interface RunState {
+  touched: Set<string>;
+  /** threads in the company's OTHER mailboxes whose messages were (un)linked as copies during this run */
+  siblingTouched: Map<string, ThreadRef>;
+  duplicates: number;
+}
+
+const newRun = (): RunState => ({ touched: new Set(), siblingTouched: new Map(), duplicates: 0 });
+
+/** Stores one page of messages: upserts, search vectors, and copy links across the company's mailboxes. */
+async function storePage(db: PrismaClient, mailbox: Mailbox, folder: SyncFolder, messages: RawMessage[], ctx: UpsertContext, run: RunState): Promise<{ upserted: number; skippedDrafts: number }> {
+  const messageIds: string[] = [];
+  const vectors: { key: string; text: string }[] = [];
+  let skippedDrafts = 0;
+  for (const raw of messages) {
+    if (raw.isDraft) {
+      skippedDrafts += 1;
+      continue;
+    }
+    const r = await upsertMessage(db, mailbox, folder, raw, ctx);
+    run.touched.add(r.conversationId);
+    if (r.internetMessageId) messageIds.push(r.internetMessageId);
+    vectors.push({ key: raw.id, text: r.searchText });
+  }
+  // One statement per page for the search index (Prisma cannot write tsvector columns in the upsert itself).
+  await writeMessageVectors(db, "graphMessageId", vectors);
+  // The same email may already be tracked in another mailbox of the company (we were Cc'd): link the copies.
+  const dedupe = await dedupeMessageIds(db, mailbox.orgId, messageIds);
+  run.duplicates += dedupe.duplicates;
+  for (const ref of dedupe.changed) {
+    if (ref.mailboxId === mailbox.id) run.touched.add(ref.conversationId);
+    else run.siblingTouched.set(threadRefKey(ref), ref);
+  }
+  return { upserted: vectors.length, skippedDrafts };
+}
+
+/** Recomputes every thread the run touched, here and in the company's other mailboxes. */
+async function finishRun(db: PrismaClient, mailbox: Mailbox, run: RunState): Promise<Pick<SyncStats, "threadsRecomputed" | "siblingThreadsRecomputed" | "duplicates" | "touchedConversationIds">> {
+  let threadsRecomputed = 0;
+  let siblingThreadsRecomputed = 0;
+  for (const conversationId of run.touched) {
+    await recomputeThread(db, mailbox.id, conversationId);
+    threadsRecomputed += 1;
+  }
+  // Other mailboxes of the company: threads that share a conversation with new mail here (a reply sent from
+  // this mailbox answers their copy too) and threads whose messages were re-linked as copies.
+  for (const ref of run.siblingTouched.values()) {
+    await recomputeThread(db, ref.mailboxId, ref.conversationId);
+    siblingThreadsRecomputed += 1;
+  }
+  siblingThreadsRecomputed += await recomputeSiblingThreads(db, mailbox.orgId, mailbox.id, Array.from(run.touched), new Set(run.siblingTouched.keys()));
+  return { threadsRecomputed, siblingThreadsRecomputed, duplicates: run.duplicates, touchedConversationIds: Array.from(run.touched) };
+}
+
 /**
  * Backfill + incremental sync for one mailbox (SPEC §5.1). Safe to re-run:
  * resumes from the saved delta/next link, or starts a fresh backfill with `reset`.
@@ -153,11 +220,8 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
   const mailbox = await db.mailbox.findUniqueOrThrow({ where: { id: mailboxId }, include: { org: true } });
   if (!opts.provider && !mailbox.org.azureTenantId) throw new Error(`Company ${mailbox.org.name} is not connected to Microsoft 365 yet (no tenant id)`);
   const provider = opts.provider ?? new GraphProvider(mailbox.org.azureTenantId!);
-  const owners = ownerAddresses(mailbox);
   const sinceDays = opts.backfillDays ?? getEnv().BACKFILL_DAYS;
-  const touched = new Set<string>();
-  // Threads in the company's OTHER mailboxes whose messages were (un)linked as copies during this run
-  const siblingTouched = new Map<string, ThreadRef>();
+  const run = newRun();
 
   const stats: SyncStats = {
     mailbox: mailbox.emailAddress,
@@ -172,7 +236,7 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
     partial: false,
     durationMs: 0,
   };
-  const ctx: UpsertContext = { owners, domains: orgDomains(mailbox.org), previewOnly: mailbox.org.bodyStorage === "preview_only", indexBodies: orgSettings(mailbox.org.settings).searchIndexBodies, exclusions: await loadExclusionContext(db, mailbox.orgId) };
+  const ctx = await upsertContext(db, mailbox);
 
   for (const folder of FOLDERS) {
     if (stats.partial) break;
@@ -200,28 +264,9 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
       const page = step.value;
       fstats.pages += 1;
       fstats.removed += page.removedIds.length;
-      const messageIds: string[] = [];
-      const vectors: { key: string; text: string }[] = [];
-      for (const raw of page.messages) {
-        if (raw.isDraft) {
-          fstats.skippedDrafts += 1;
-          continue;
-        }
-        const r = await upsertMessage(db, mailbox, folder, raw, ctx);
-        touched.add(r.conversationId);
-        if (r.internetMessageId) messageIds.push(r.internetMessageId);
-        vectors.push({ key: raw.id, text: r.searchText });
-        fstats.upserted += 1;
-      }
-      // One statement per page for the search index (Prisma cannot write tsvector columns in the upsert itself).
-      await writeMessageVectors(db, "graphMessageId", vectors);
-      // The same email may already be tracked in another mailbox of the company (we were Cc'd): link the copies.
-      const dedupe = await dedupeMessageIds(db, mailbox.orgId, messageIds);
-      stats.duplicates += dedupe.duplicates;
-      for (const ref of dedupe.changed) {
-        if (ref.mailboxId === mailbox.id) touched.add(ref.conversationId);
-        else siblingTouched.set(threadRefKey(ref), ref);
-      }
+      const r = await storePage(db, mailbox, folder, page.messages, ctx, run);
+      fstats.upserted += r.upserted;
+      fstats.skippedDrafts += r.skippedDrafts;
       log.debug(`page done`, { folder, page: fstats.pages, messages: page.messages.length });
       if (opts.deadlineAt && Date.now() >= opts.deadlineAt.getTime()) {
         // The nextLink for this page was already saved by onProgress; the next run continues from it.
@@ -234,19 +279,7 @@ async function syncMailboxInner(db: PrismaClient, mailboxId: string, opts: SyncO
     log.info(`${folder} done`, { ...fstats });
   }
 
-  for (const conversationId of touched) {
-    await recomputeThread(db, mailbox.id, conversationId);
-    stats.threadsRecomputed += 1;
-  }
-  // Other mailboxes of the company: threads that share a conversation with new mail here (a reply sent from
-  // this mailbox answers their copy too) and threads whose messages were re-linked as copies.
-  for (const ref of siblingTouched.values()) {
-    await recomputeThread(db, ref.mailboxId, ref.conversationId);
-    stats.siblingThreadsRecomputed += 1;
-  }
-  stats.siblingThreadsRecomputed += await recomputeSiblingThreads(db, mailbox.orgId, mailbox.id, Array.from(touched), new Set(siblingTouched.keys()));
-
-  stats.touchedConversationIds = Array.from(touched);
+  Object.assign(stats, await finishRun(db, mailbox, run));
   await db.mailbox.update({ where: { id: mailbox.id }, data: { lastSyncedAt: new Date() } });
   stats.durationMs = Date.now() - started;
   log.info("sync complete", { mailbox: mailbox.emailAddress, threads: stats.threadsRecomputed, siblingThreads: stats.siblingThreadsRecomputed, duplicates: stats.duplicates, ms: stats.durationMs });
@@ -277,4 +310,42 @@ export async function syncMailboxLocked(mailboxId: string, opts: SyncOptions = {
   } finally {
     await releaseSyncLock(db, mailboxId);
   }
+}
+
+export interface FolderImportStats extends Pick<SyncStats, "threadsRecomputed" | "siblingThreadsRecomputed" | "duplicates" | "touchedConversationIds"> {
+  mailbox: string;
+  folders: { path: string; pages: number; upserted: number; skippedDrafts: number }[];
+  durationMs: number;
+}
+
+/**
+ * One-off import of extra folders that hold SENT mail (e.g. the old provider's
+ * "Sent" folder copied in by a migration). Their messages are stored exactly like
+ * Sent Items, so replies in them count. Read-only on the mailbox; safe to re-run
+ * (messages are upserted by id). No delta link is kept: nothing new lands in these folders.
+ */
+export async function importSentFolders(mailboxId: string, folders: { id: string; path: string }[], opts: { sinceDays?: number; provider?: MailProvider } = {}): Promise<FolderImportStats> {
+  const db = getDb();
+  const started = Date.now();
+  const mailbox = await db.mailbox.findUniqueOrThrow({ where: { id: mailboxId }, include: { org: true } });
+  if (!opts.provider && !mailbox.org.azureTenantId) throw new Error(`Company ${mailbox.org.name} is not connected to Microsoft 365 yet (no tenant id)`);
+  const provider = opts.provider ?? new GraphProvider(mailbox.org.azureTenantId!);
+  const sinceDays = opts.sinceDays ?? getEnv().BACKFILL_DAYS;
+  const ctx = await upsertContext(db, mailbox);
+  const run = newRun();
+  const out: FolderImportStats["folders"] = [];
+
+  for (const folder of folders) {
+    const fstats = { path: folder.path, pages: 0, upserted: 0, skippedDrafts: 0 };
+    log.info("importing sent folder", { mailbox: mailbox.emailAddress, folder: folder.path, days: sinceDays });
+    for await (const messages of provider.listFolderMessages(mailbox.graphUserId, folder.id, sinceDays)) {
+      fstats.pages += 1;
+      const r = await storePage(db, mailbox, "sentitems", messages, ctx, run);
+      fstats.upserted += r.upserted;
+      fstats.skippedDrafts += r.skippedDrafts;
+    }
+    out.push(fstats);
+  }
+  const finished = await finishRun(db, mailbox, run);
+  return { mailbox: mailbox.emailAddress, folders: out, ...finished, durationMs: Date.now() - started };
 }

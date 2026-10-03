@@ -106,6 +106,8 @@ Migrations are never run by the Vercel build. Run `pnpm db:deploy` yourself afte
 6. **Backfill from your laptop** (uses the production `DATABASE_URL` in your `.env`):
    ```bash
    pnpm sync:once sales@<company-domain> --no-ai          # last 90 days of Inbox + Sent
+   pnpm folders:list sales@<company-domain>                # migrated mailbox? old sent mail in a plain "Sent" folder
+   pnpm folders:import all --org <company>                # …then load it as sent mail (README §8)
    pnpm replies:report sales@<company-domain> --days 30   # sanity check against Outlook
    pnpm ai:backfill sales@<company-domain> --dry-run      # shows thread count + estimated cost, no spend
    pnpm ai:backfill sales@<company-domain>                # Batch API (50% cheaper); waits and saves results
