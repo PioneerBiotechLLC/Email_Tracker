@@ -13,7 +13,7 @@ export async function GET(req: Request) {
   if (denied) return denied;
   if (!hasAnthropicKey()) return NextResponse.json({ ok: false, error: "ANTHROPIC_API_KEY not set" }, { status: 200 });
   const started = Date.now();
-  const r = await summarizeThreads({ deadlineAt: deadline(50), limit: 200 });
+  const r = await summarizeThreads({ deadlineAt: deadline(), limit: 200 });
   return NextResponse.json({ ok: true, ...r, ms: Date.now() - started });
 }
 export const POST = GET;

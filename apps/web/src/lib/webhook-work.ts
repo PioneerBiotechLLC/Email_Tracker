@@ -14,7 +14,8 @@ export async function processMailbox(mailboxId: string, opts: { deadlineAt?: Dat
       return;
     }
     let ai: { summarized: number; errors: number; skipped: Record<string, number> } | null = null;
-    if (stats.touchedConversationIds.length && hasAnthropicKey() && !(opts.deadlineAt && Date.now() >= opts.deadlineAt.getTime())) {
+    // A partial run is a backfill still in progress: its threads are summarized by the summarize cron once loaded.
+    if (stats.touchedConversationIds.length && !stats.partial && hasAnthropicKey() && !(opts.deadlineAt && Date.now() >= opts.deadlineAt.getTime())) {
       // Debounced inside summarizeThread: threads with a very recent message are left for the cron run.
       ai = await summarizeThreads({ mailboxId, conversationIds: stats.touchedConversationIds, deadlineAt: opts.deadlineAt });
     }
@@ -26,8 +27,14 @@ export async function processMailbox(mailboxId: string, opts: { deadlineAt?: Dat
   }
 }
 
-/** Budget for background work inside one serverless invocation (leave headroom under maxDuration). */
-export function deadline(seconds: number): Date {
+/**
+ * When to stop STARTING work inside one 60-second invocation. Work already under way still finishes after it
+ * (the current Graph page, recomputing every thread that page touched, a Claude call in flight), which takes
+ * well over 10 seconds while a new mailbox is backfilling, so the budget leaves 25 seconds of headroom.
+ */
+export const WORK_BUDGET_SECONDS = 35;
+
+export function deadline(seconds = WORK_BUDGET_SECONDS): Date {
   return new Date(Date.now() + seconds * 1000);
 }
 

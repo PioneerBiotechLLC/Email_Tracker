@@ -17,7 +17,7 @@ export async function GET(req: Request) {
   if (denied) return denied;
   const db = getDb();
   const started = Date.now();
-  const until = deadline(50);
+  const until = deadline();
   const mailboxes = await db.mailbox.findMany({ where: { isActive: true, org: { azureTenantId: { not: null } } }, orderBy: [{ lastSyncedAt: { sort: "asc", nulls: "first" } }], select: { id: true, emailAddress: true } });
   const processed: string[] = [];
   for (const mb of mailboxes) {

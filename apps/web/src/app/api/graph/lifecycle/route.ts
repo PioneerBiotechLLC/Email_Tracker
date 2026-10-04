@@ -19,7 +19,7 @@ export async function POST(req: Request) {
 
   after(async () => {
     const db = getDb();
-    const until = deadline(50);
+    const until = deadline();
     for (const n of accepted) {
       const mb = await db.mailbox.findFirst({ where: { subscriptionId: n.subscriptionId }, select: { id: true } });
       if (!mb) continue;

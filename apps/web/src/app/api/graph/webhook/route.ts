@@ -26,7 +26,7 @@ export async function POST(req: Request) {
   if (unknown.length) log.warn("notifications for unknown subscriptions", { count: unknown.length });
 
   after(async () => {
-    const until = deadline(50);
+    const until = deadline();
     for (const mb of mailboxes) await processMailbox(mb.id, { deadlineAt: until, reason: "webhook" });
   });
   return new NextResponse(null, { status: 202 });
