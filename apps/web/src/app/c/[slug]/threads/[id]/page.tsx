@@ -5,13 +5,14 @@ import { ignoreSender } from "@/actions/rules";
 import { classifyThread, closeThread, reopenThread, resummarizeThread, setNeedsReply } from "@/actions/thread";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ActionButton } from "@/components/shared/action-button";
 import { ConfirmForm } from "@/components/shared/confirm-form";
 import { CategoryChip, ExcludedBadge, PriorityChip, StatusBadge } from "@/components/shared/badges";
 import { IgnoreMenu } from "@/components/shared/ignore-menu";
 import { RuleBanner } from "@/components/shared/rule-banner";
 import { getThreadDetail } from "@/lib/data/thread-detail";
 import { chatEnabled } from "@/lib/chat-flag";
-import { CATEGORY_LABEL, formatDateTime, formatMinutes, formatSince, titleCase } from "@/lib/format";
+import { CATEGORY_LABEL, formatDateTime, formatMinutes, formatSince, titleCase, summaryErrorText } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -60,12 +61,13 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
         </div>
         {isAdmin && (
           <div className="flex flex-wrap gap-2" aria-label="Thread actions">
+            {/* Reversible actions run straight away (each has its opposite right here); only spending AI money asks first. */}
             {thread.status === "closed"
-              ? <ConfirmForm action={reopenThread.bind(null, thread.id)} confirmText="Reopen this thread?">Reopen</ConfirmForm>
-              : <ConfirmForm action={closeThread.bind(null, thread.id)} confirmText="Mark this thread as closed? A new inbound email will reopen it.">Mark closed</ConfirmForm>}
+              ? <ActionButton variant="outline" action={reopenThread.bind(null, thread.id)} pendingLabel="Reopening…" title="A new inbound email also reopens it">Reopen</ActionButton>
+              : <ActionButton variant="outline" action={closeThread.bind(null, thread.id)} pendingLabel="Closing…" title="A new inbound email reopens it">Mark closed</ActionButton>}
             {thread.needsReply
-              ? <ConfirmForm action={setNeedsReply.bind(null, thread.id, false)} confirmText="Mark as 'no reply needed'? This stays until a new email arrives in the thread.">No reply needed</ConfirmForm>
-              : <ConfirmForm action={setNeedsReply.bind(null, thread.id, true)} confirmText="Mark this thread as needing a reply?">Needs reply</ConfirmForm>}
+              ? <ActionButton variant="outline" action={setNeedsReply.bind(null, thread.id, false)} pendingLabel="Saving…" title="Stays until a new email arrives in the thread">No reply needed</ActionButton>
+              : <ActionButton variant="outline" action={setNeedsReply.bind(null, thread.id, true)} pendingLabel="Saving…">Needs reply</ActionButton>}
             {!thread.exclusionAction && !thread.duplicateOf && (thread.summary
               ? <ConfirmForm action={resummarizeThread.bind(null, thread.id)} confirmText="Re-summarize with Claude now? This uses one AI call (counts toward the daily cap).">Re-summarize</ConfirmForm>
               : <ConfirmForm action={resummarizeThread.bind(null, thread.id)} confirmText="Summarize this thread with Claude now? This uses one AI call (counts toward the daily cap).">Summarize</ConfirmForm>)}
@@ -98,7 +100,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
           {messages.map((m) => {
             const ours = m.direction === "outbound" || owners.has(m.fromAddress);
             return (
-              <article key={m.id} id={`msg-${m.id}`} className={cn("max-w-[92%] scroll-mt-24 rounded-lg border p-3 text-sm target:ring-2 target:ring-primary", ours ? "self-end bg-primary/5 border-primary/20" : "self-start bg-card", m.isAutoReply && "opacity-60")}>
+              <article key={m.id} id={`msg-${m.id}`} className={cn("max-w-[92%] scroll-mt-24 rounded-lg border p-3 text-sm target:ring-2 target:ring-primary", ours ? "self-end bg-secondary" : "self-start bg-card", m.isAutoReply && "opacity-60")}>
                 <header className="mb-1 flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
                   <span className="font-medium text-foreground" dir="auto">{m.fromName || m.fromAddress}</span>
                   {m.fromName && <span>{m.fromAddress}</span>}
@@ -147,11 +149,11 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
                   </dl>
                 </>
               ) : thread.summaryError ? (
-                <p className="text-status-bad">Summary failed: {thread.summaryError.replace(/^\S+\s/, "")}</p>
+                <p className="text-status-bad" title={summaryErrorText(thread.summaryError).detail}>{summaryErrorText(thread.summaryError).text}</p>
               ) : thread.exclusionAction ? (
                 <p className="text-muted-foreground">Excluded mail is not summarized.</p>
               ) : <p className="italic text-muted-foreground">No AI summary yet. Summaries are made on request{isAdmin ? ": use Summarize above (one AI call)." : " by a company admin."}</p>}
-              {thread.summaryError && thread.summary && <p className="text-xs text-status-bad">Last attempt failed: {thread.summaryError.replace(/^\S+\s/, "").slice(0, 120)}</p>}
+              {thread.summaryError && thread.summary && <p className="text-xs text-status-bad" title={summaryErrorText(thread.summaryError).detail}>Last update failed: {summaryErrorText(thread.summaryError).text}</p>}
             </CardContent>
           </Card>
 

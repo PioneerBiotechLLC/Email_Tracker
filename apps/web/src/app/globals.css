@@ -60,10 +60,10 @@
   --border: oklch(0.91 0 0);
   --input: oklch(0.91 0 0);
   --ring: var(--brand);
-  /* status colors are independent of the brand */
-  --status-ok: oklch(0.62 0.17 150);
-  --status-warn: oklch(0.75 0.16 75);
-  --status-bad: oklch(0.6 0.21 27);
+  /* status colors are independent of the brand; light-mode values keep small status text at ≥ 4.5:1 on its tinted badge */
+  --status-ok: oklch(0.5 0.14 150);
+  --status-warn: oklch(0.52 0.12 65);
+  --status-bad: oklch(0.52 0.2 27);
   --status-muted: oklch(0.6 0 0);
 }
 
@@ -102,7 +102,29 @@
   * { @apply border-border outline-ring/50; }
   body { @apply bg-background text-foreground font-sans antialiased; }
   h1, h2, h3 { @apply font-heading; }
+  /* Tracking is size-specific: large display text tightens, body stays at 0 */
+  h1 { letter-spacing: -0.015em; line-height: 1.15; }
+  /* Figures in tables line up column by column */
+  table { font-variant-numeric: tabular-nums; }
 }
+
+/* Reduced motion: no movement or scaling, only instant state changes (colour changes still show the press) */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  .press:active, [data-slot="button"]:active { transform: none !important; }
+}
+
+/* Feedback on press, not on release: a quick 100ms scale-down while the pointer is held */
+.press { transition: transform 100ms ease-out, background-color 150ms ease-out, color 150ms ease-out; }
+.press:active { transform: scale(0.97); }
+
+/* Scroll edge: a horizontally scrolling strip fades out at its edge instead of cutting a word in half */
+.scroll-fade-x { mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent); }
 
 /* status badges: text + color, never color alone */
 .status-replied { @apply bg-status-ok/12 text-status-ok border-status-ok/30; }

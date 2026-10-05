@@ -16,7 +16,7 @@ function Tile({ label, value, sub, tooltip }: { label: string; value: string; su
   const body = (
     <Card className="gap-1 py-4">
       <CardHeader className="px-4"><CardTitle className="font-sans text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</CardTitle></CardHeader>
-      <CardContent className="px-4"><div className="font-heading text-2xl font-bold">{value}</div>{sub && <div className="text-xs text-muted-foreground">{sub}</div>}</CardContent>
+      <CardContent className="px-4"><div className="font-heading text-2xl font-bold tracking-tight tabular-nums">{value}</div>{sub && <div className="text-xs text-muted-foreground">{sub}</div>}</CardContent>
     </Card>
   );
   return tooltip ? <Tooltip><TooltipTrigger asChild><div tabIndex={0}>{body}</div></TooltipTrigger><TooltipContent>{tooltip}</TooltipContent></Tooltip> : body;

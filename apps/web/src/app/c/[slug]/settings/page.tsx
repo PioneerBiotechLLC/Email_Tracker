@@ -3,6 +3,7 @@ import { toggleMailbox, updateBranding, updateBusinessHours, updateDigest, updat
 import { BODY_FONTS, HEADING_FONTS } from "@/lib/fonts";
 import { addUser, removeUser, setUserRole } from "@/actions/users";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ActionButton } from "@/components/shared/action-button";
 import { ConfirmForm } from "@/components/shared/confirm-form";
 import { SettingsForm, field } from "@/components/settings/forms";
 import { RuleForm } from "@/components/settings/rule-form";
@@ -40,7 +41,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
                     <div className="text-xs text-muted-foreground">{m._count.threads} threads · {m._count.messages} messages · last synced {formatDateTime(m.lastSyncedAt, tz, now)}</div>
                     {m.lastSyncError && <div className="text-xs text-status-bad">Sync error {formatDateTime(m.lastSyncErrorAt, tz, now)}: {m.lastSyncError.slice(0, 160)}</div>}
                   </div>
-                  <ConfirmForm action={toggleMailbox.bind(null, orgId, m.id, !m.isActive)} confirmText={m.isActive ? "Pause syncing this mailbox?" : "Resume syncing this mailbox?"}>{m.isActive ? "Pause" : "Resume"}</ConfirmForm>
+                  <ActionButton variant="outline" action={toggleMailbox.bind(null, orgId, m.id, !m.isActive)} pendingLabel={m.isActive ? "Pausing…" : "Resuming…"}>{m.isActive ? "Pause" : "Resume"}</ActionButton>
                 </li>
               ))}
               {!s.mailboxes.length && <li className="py-2 text-muted-foreground">No mailboxes yet.</li>}

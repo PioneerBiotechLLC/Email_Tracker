@@ -65,9 +65,22 @@ export function formatPct(n: number | null | undefined): string {
   return n == null ? "–" : `${n.toFixed(n % 1 ? 1 : 0)}%`;
 }
 
+/**
+ * A stored summary error ("<iso time> <code>: <detail>") in plain language for the page;
+ * the technical text goes in `detail` (shown as a tooltip).
+ */
+export function summaryErrorText(stored: string): { text: string; detail: string } {
+  const detail = stored.replace(/^\S+\s/, "");
+  const text = /^api_error/.test(detail) ? "The AI service could not be reached. Try again later."
+    : detail === "refusal" ? "The AI declined to summarize this thread."
+    : /^(invalid_output|no_tool_call|max_tokens)/.test(detail) ? "The AI's answer was incomplete. Try Re-summarize."
+    : "The summary could not be made. Try Re-summarize.";
+  return { text, detail };
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   replied: "Replied ✓",
-  waiting: "Waiting",
+  waiting: "Awaiting reply",
   overdue: "Overdue",
   no_reply_needed: "No reply needed",
   awaiting_us: "Awaiting our reply",

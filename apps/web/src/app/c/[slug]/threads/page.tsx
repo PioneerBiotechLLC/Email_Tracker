@@ -6,7 +6,7 @@ import { ExcludedToggle, FilterBar } from "@/components/shared/filter-bar";
 import { Pagination } from "@/components/shared/pagination";
 import { getThreadsPage } from "@/lib/data/threads";
 import { parseFilters, type SearchParams } from "@/lib/filters";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, summaryErrorText } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
 
 export const metadata = { title: "Threads" };
@@ -47,7 +47,7 @@ export default async function ThreadsPage({ params, searchParams }: { params: Pr
               {t.summary ? (
                 <p className="line-clamp-2 text-sm" dir="auto">{t.summary}{t.messageCount > t.summaryMessageCount && <span className="ml-1 text-xs text-muted-foreground">(new messages since summary)</span>}</p>
               ) : t.summaryError ? (
-                <p className="text-sm text-status-bad">Summary error. <span className="text-muted-foreground">{t.summaryError.replace(/^\S+\s/, "").slice(0, 80)}</span></p>
+                <p className="text-sm text-status-bad" title={summaryErrorText(t.summaryError).detail}>{summaryErrorText(t.summaryError).text}</p>
               ) : null}
               {t.nextAction && <p className="text-sm" dir="auto"><span className="font-medium">Next:</span> {t.nextAction}</p>}
             </li>

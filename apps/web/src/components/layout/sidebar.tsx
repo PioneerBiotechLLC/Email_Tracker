@@ -44,7 +44,7 @@ export function CompanySwitcher({ current, companies, isOwner }: { current: Comp
   useEffect(() => { void rememberCompany(current.slug); }, [current.slug]);
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex w-full items-center gap-3 border-b px-5 py-4 text-left hover:bg-accent/50" aria-label="Switch company">
+      <DropdownMenuTrigger className="flex w-full items-center gap-3 border-b px-5 py-4 text-left transition-colors hover:bg-accent/50 active:bg-accent" aria-label="Switch company">
         <Logo name={current.name} logoUrl={current.logoUrl} />
         <div className="min-w-0 flex-1">
           <div className="truncate font-heading text-sm font-bold leading-tight">{current.name}</div>
@@ -76,7 +76,7 @@ export function Sidebar({ current, companies, role, isOwner, chatEnabled }: { cu
       <nav className="flex flex-1 flex-col gap-1 p-3">
         {visibleNav(role, chatEnabled).map((n) => (
           <Link key={n.href} href={href(n.href)} aria-current={active(n.href) ? "page" : undefined}
-            className={cn("flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors", active(n.href) ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
+            className={cn("press flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium", active(n.href) ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
             <n.icon className="size-4" aria-hidden />
             {n.label}
           </Link>
@@ -89,13 +89,13 @@ export function Sidebar({ current, companies, role, isOwner, chatEnabled }: { cu
 export function MobileNav({ role, isOwner, chatEnabled }: { role: "admin" | "viewer"; isOwner: boolean; chatEnabled: boolean }) {
   const { href, active } = useNav();
   return (
-    <nav className="flex gap-1 overflow-x-auto border-b bg-card px-2 py-1 md:hidden" aria-label="Main navigation">
+    <nav className="scroll-fade-x flex gap-1 overflow-x-auto border-b bg-card px-2 py-1 pe-8 md:hidden" aria-label="Main navigation">
       {visibleNav(role, chatEnabled).map((n) => (
-        <Link key={n.href} href={href(n.href)} aria-current={active(n.href) ? "page" : undefined} className={cn("whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium", active(n.href) ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>
+        <Link key={n.href} href={href(n.href)} aria-current={active(n.href) ? "page" : undefined} className={cn("press whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium", active(n.href) ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>
           {n.label}
         </Link>
       ))}
-      {isOwner && <Link href="/companies" className="whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground">Companies</Link>}
+      {isOwner && <Link href="/companies" className="press whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground">Companies</Link>}
     </nav>
   );
 }
