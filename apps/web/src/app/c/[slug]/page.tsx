@@ -30,7 +30,7 @@ export default async function OverviewPage({ params, searchParams }: { params: P
   const trackFrom = trackingStart(org);
   const f = clampToTracking(parseFilters(sp, org.timezone), trackFrom, org.timezone);
   const now = new Date();
-  const o = await getOverview(ctx, f, org.timezone, now);
+  const o = await getOverview(ctx, f, org.timezone, now, trackFrom);
   const k = o.kpis;
   const chartData = o.days.map((d) => ({ ...d }));
   const byCategory = o.byCategory.map((c) => ({ category: CATEGORY_LABEL[c.category] ?? c.category, count: c.count }));

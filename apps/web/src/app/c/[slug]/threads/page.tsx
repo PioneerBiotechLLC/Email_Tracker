@@ -1,3 +1,4 @@
+import { trackingStart } from "@email-tracker/core";
 import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { CategoryChip, ExcludedBadge, PriorityChip, StatusBadge } from "@/components/shared/badges";
@@ -26,7 +27,7 @@ export default async function ThreadsPage({ params, searchParams }: { params: Pr
   const base = `/c/${slug}`;
   const f = parseFilters(sp, org.timezone);
   const now = new Date();
-  const { rows, total, pages } = await getThreadsPage(ctx, f, now);
+  const { rows, total, pages } = await getThreadsPage(ctx, f, now, trackingStart(org));
 
   return (
     <div className="space-y-4">

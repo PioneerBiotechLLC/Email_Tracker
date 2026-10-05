@@ -3,13 +3,14 @@ import { getDb, listVisibility, mailboxScope, type Prisma, type SessionContext }
 import type { Filters } from "@/lib/filters";
 import { exclusionReasons } from "./exclusions";
 
-export function threadsWhere(ctx: SessionContext, f: Filters, now = new Date()): Prisma.ThreadWhereInput {
+/** `trackFrom`: the company's reply-tracking start; "waiting" / "overdue" leave out threads waiting since before it. */
+export function threadsWhere(ctx: SessionContext, f: Filters, now: Date, trackFrom: Date | null): Prisma.ThreadWhereInput {
   const where: Prisma.ThreadWhereInput = { ...mailboxScope(ctx, f.mailboxId), lastMessageAt: { gte: f.from, lte: f.to }, AND: [listVisibility(f.showExcluded)] };
   if (f.category) where.category = f.category as Prisma.ThreadWhereInput["category"];
   if (f.priority) where.priority = f.priority as Prisma.ThreadWhereInput["priority"];
   switch (f.status) {
-    case "overdue": where.status = "awaiting_us"; where.overdueAt = { lte: now }; break;
-    case "awaiting_us": where.status = "awaiting_us"; break;
+    case "overdue": where.status = "awaiting_us"; where.overdueAt = { lte: now }; if (trackFrom) where.awaitingSince = { gte: trackFrom }; break;
+    case "awaiting_us": where.status = "awaiting_us"; if (trackFrom) where.awaitingSince = { gte: trackFrom }; break;
     case "awaiting_them": where.status = "awaiting_them"; break;
     case "no_reply_needed": where.status = "no_reply_needed"; break;
     case "closed": where.status = "closed"; break;
@@ -27,9 +28,9 @@ const select = {
 } satisfies Prisma.ThreadSelect;
 export type ThreadRow = Prisma.ThreadGetPayload<{ select: typeof select }> & { excludedReason: string | null };
 
-export async function getThreadsPage(ctx: SessionContext, f: Filters, now = new Date()) {
+export async function getThreadsPage(ctx: SessionContext, f: Filters, now: Date, trackFrom: Date | null) {
   const db = getDb();
-  const where = threadsWhere(ctx, f, now);
+  const where = threadsWhere(ctx, f, now, trackFrom);
   const [rows, total] = await db.$transaction([
     db.thread.findMany({ where, orderBy: [{ lastMessageAt: "desc" }, { id: "asc" }], skip: (f.page - 1) * f.pageSize, take: f.pageSize, select }),
     db.thread.count({ where }),
