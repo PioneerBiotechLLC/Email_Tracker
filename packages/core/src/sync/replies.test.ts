@@ -180,6 +180,18 @@ describe("detectReplies", () => {
 });
 
 describe("computeThreadStatus", () => {
+  it("mail received before reply tracking starts never waits for a reply; newer mail in the same thread does", () => {
+    const trackFrom = dxb("2026-10-05T00:00:00");
+    const old = inbound({ id: "old", receivedAt: dxb("2026-09-20T10:00:00") });
+    expect(computeThreadStatus([old], detectReplies([old], opts), fresh, { ...statusOpts, trackFrom }).status).toBe("no_reply_needed");
+    const later = inbound({ id: "later", receivedAt: dxb("2026-10-06T10:00:00") });
+    const st = computeThreadStatus([old, later], detectReplies([old, later], opts), fresh, { ...statusOpts, trackFrom });
+    expect(st.status).toBe("awaiting_us");
+    expect(st.awaitingSince).toEqual(later.receivedAt);
+    // without a start date the old email is still owed a reply
+    expect(computeThreadStatus([old], detectReplies([old], opts), fresh, statusOpts).status).toBe("awaiting_us");
+  });
+
   it("awaiting_us when latest real message is unanswered inbound", () => {
     const a = inbound({ id: "a", receivedAt: dxb("2026-09-28T10:00:00") });
     const rs = detectReplies([a], opts);

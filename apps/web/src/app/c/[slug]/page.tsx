@@ -1,11 +1,12 @@
 import Link from "next/link";
+import { trackingStart } from "@email-tracker/core";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AwaitingByCategoryChart, ReceivedVsRepliedChart, ResponseTimeChart } from "@/components/charts/overview-charts";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PriorityChip, StatusBadge } from "@/components/shared/badges";
 import { getOverview } from "@/lib/data/overview";
-import { parseFilters, withParams, type SearchParams } from "@/lib/filters";
+import { clampToTracking, parseFilters, withParams, type SearchParams } from "@/lib/filters";
 import { CATEGORY_LABEL, formatDateTime, formatMinutes, formatPct, formatSince } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
 
@@ -26,7 +27,8 @@ export default async function OverviewPage({ params, searchParams }: { params: P
   const sp = await searchParams;
   const { ctx, org } = await getCompanyContext(slug);
   const base = `/c/${slug}`;
-  const f = parseFilters(sp, org.timezone);
+  const trackFrom = trackingStart(org);
+  const f = clampToTracking(parseFilters(sp, org.timezone), trackFrom, org.timezone);
   const now = new Date();
   const o = await getOverview(ctx, f, org.timezone, now);
   const k = o.kpis;
@@ -38,7 +40,7 @@ export default async function OverviewPage({ params, searchParams }: { params: P
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="text-2xl font-bold">Overview</h1>
         <p className="text-sm text-muted-foreground">
-          {f.fromDay} → {f.toDay}{sp.denied ? " · Settings are admin-only" : ""} · <Link href={`${base}/summary` + withParams(sp, { range: null, from: null, to: null, page: null, denied: null })} className="underline">Daily / weekly summary</Link>
+          {f.fromDay} → {f.toDay}{trackFrom && f.from.getTime() === trackFrom.getTime() ? " (reply tracking starts here)" : ""}{sp.denied ? " · Settings are admin-only" : ""} · <Link href={`${base}/summary` + withParams(sp, { range: null, from: null, to: null, page: null, denied: null })} className="underline">Daily / weekly summary</Link>
         </p>
       </div>
 

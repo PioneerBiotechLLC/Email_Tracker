@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
+import { trackingStart } from "@email-tracker/core";
 import { toCsv } from "@/lib/csv";
 import { EXPORT_LIMIT, getTrackerExport } from "@/lib/data/tracker";
-import { parseFilters, type SearchParams } from "@/lib/filters";
+import { clampToTracking, parseFilters, type SearchParams } from "@/lib/filters";
 import { formatDateTime, STATUS_LABEL } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
 
@@ -9,7 +10,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   const { slug } = await params;
   const { ctx, org } = await getCompanyContext(slug);
   const sp: SearchParams = Object.fromEntries(new URL(req.url).searchParams.entries());
-  const f = parseFilters(sp, org.timezone);
+  const f = clampToTracking(parseFilters(sp, org.timezone), trackingStart(org), org.timezone);
   const now = new Date();
   const rows = await getTrackerExport(ctx, f, now);
   const tz = org.timezone;

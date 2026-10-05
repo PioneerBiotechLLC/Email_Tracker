@@ -13,7 +13,11 @@ const hoursSchema = z.object({
   workEnd: hhmm,
   replySlaHours: z.coerce.number().positive().max(720).nullable(),
   summaryLanguage: z.enum(["en", "ar"]),
+  trackRepliesFrom: z.union([z.literal(""), z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date")]).transform((v) => v || null),
 });
+
+/** Recomputing every thread can outlast one request for a big company; the rest is finished by `pnpm replies:recompute all`. */
+const RECOMPUTE_SECONDS = 40;
 
 export type ActionResult = { ok: true; message: string } | { ok: false; message: string };
 
@@ -26,17 +30,24 @@ export async function updateBusinessHours(orgId: string, _prev: ActionResult | n
     workEnd: formData.get("workEnd"),
     replySlaHours: formData.get("replySlaHours") ? formData.get("replySlaHours") : null,
     summaryLanguage: formData.get("summaryLanguage"),
+    trackRepliesFrom: String(formData.get("trackRepliesFrom") ?? ""),
   });
   if (!parsed.success) return { ok: false, message: parsed.error.issues.map((i) => i.message).join("; ") };
   const db = getDb();
   const before = await db.organization.findUniqueOrThrow({ where: { id: ctx.orgId } });
-  await db.organization.update({ where: { id: ctx.orgId }, data: parsed.data });
-  await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "settings.businessHours", targetType: "organization", targetId: ctx.orgId, before: { timezone: before.timezone, workDays: before.workDays, workStart: before.workStart, workEnd: before.workEnd, replySlaHours: before.replySlaHours, summaryLanguage: before.summaryLanguage }, after: parsed.data });
-  // Business hours / SLA changes affect response times and overdue flags: recompute every thread.
+  const { trackRepliesFrom, ...columns } = parsed.data;
+  const settings = { ...(before.settings && typeof before.settings === "object" && !Array.isArray(before.settings) ? before.settings : {}), trackRepliesFrom } as Prisma.InputJsonObject;
+  await db.organization.update({ where: { id: ctx.orgId }, data: { ...columns, settings } });
+  await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "settings.businessHours", targetType: "organization", targetId: ctx.orgId, before: { timezone: before.timezone, workDays: before.workDays, workStart: before.workStart, workEnd: before.workEnd, replySlaHours: before.replySlaHours, summaryLanguage: before.summaryLanguage, trackRepliesFrom: orgSettings(before.settings).trackRepliesFrom }, after: parsed.data });
+  // Business hours, SLA and the tracking start change response times and overdue flags: recompute every thread.
+  const until = new Date(Date.now() + RECOMPUTE_SECONDS * 1000);
   const mailboxes = await db.mailbox.findMany({ where: { orgId: ctx.orgId }, select: { id: true } });
-  for (const mb of mailboxes) await recomputeMailboxThreads(db, mb.id);
+  let partial = false;
+  for (const mb of mailboxes) {
+    if ((await recomputeMailboxThreads(db, mb.id, undefined, until)).partial) { partial = true; break; }
+  }
   revalidatePath("/c/[slug]", "layout");
-  return { ok: true, message: "Business hours saved and all threads recomputed." };
+  return { ok: true, message: partial ? "Saved. Many threads to update: the rest is recomputed by `pnpm replies:recompute all` (or the next sync of each thread)." : "Business hours saved and all threads recomputed." };
 }
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #BE272C");

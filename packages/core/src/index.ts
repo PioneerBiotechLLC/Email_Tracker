@@ -18,7 +18,7 @@ export { recomputeThread, recomputeMailboxThreads, recomputeSiblingThreads, busi
 export { orgDomains, domainOf, internalRecipients, copyRank, pickPrimary, assignPrimaries, dedupeMessageIds, dedupeOrgMessages, threadRefKey, type MessageCopy, type ThreadRef, type DedupeOrgResult } from "./sync/dedupe.js";
 export { RULE_TYPES, EXCLUSION_ACTIONS, normalizeRuleValue, ruleValueError, exclusionReason, listVisibility, COUNTED } from "./sync/exclusions.js";
 export { reapplyExclusions, countRuleMatches, seedDefaultRules, DEFAULT_EXCLUSION_RULES, type ReapplyResult } from "./sync/exclusion-rules.js";
-export { orgSettings } from "./org-settings.js";
+export { orgSettings, trackingStart } from "./org-settings.js";
 export {
   detectReplies, computeThreadStatus, effectiveTime, isFromUs, isRealInbound, isRealOutbound, REPLY_VERBS, FORWARD_VERB,
   type ReplyInputMessage, type ReplyResult, type DetectOptions, type ThreadState, type StatusOptions, type StatusResult,

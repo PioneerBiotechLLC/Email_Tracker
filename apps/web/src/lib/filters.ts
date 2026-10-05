@@ -40,6 +40,16 @@ function startOfLocalDay(day: string, tz: string): Date | null {
   return zonedTimeToUtc(Number(m[1]), Number(m[2]), Number(m[3]), 0, 0, tz);
 }
 
+/**
+ * Reply statistics and the Inbox Tracker never reach back before the company's tracking start
+ * (Settings → Track replies from). Returns the filters unchanged when there is none.
+ */
+export function clampToTracking(f: Filters, start: Date | null, tz: string): Filters {
+  if (!start || f.from.getTime() >= start.getTime()) return f;
+  const from = start.getTime() > f.to.getTime() ? f.to : start;
+  return { ...f, from, fromDay: localDayString(from, tz) };
+}
+
 /** Parses the URL query string into typed filters. Dates are interpreted in the org timezone. */
 export function parseFilters(sp: SearchParams, tz: string, now = new Date()): Filters {
   const mailbox = one(sp, "mailbox");

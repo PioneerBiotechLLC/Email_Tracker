@@ -269,6 +269,10 @@ pnpm db:deploy
 pnpm replies:recompute all      # re-links copies, fills internalRecipients, recomputes every thread
 ```
 
+### Track replies from a start date
+
+Settings → Business hours → **Track replies from** (per company, stored in `Organization.settings.trackRepliesFrom`, a day in the company timezone). Emails received before that day never count as waiting for a reply (their threads become "no reply needed" unless newer mail arrives), and Overview and Inbox Tracker (and its CSV) never reach back before it. Older mail stays stored, searchable in Ask and listed on the Threads page. Saving recomputes every thread within 40 seconds; for a large company finish with `pnpm replies:recompute all`. Clearing the date restores the full history.
+
 ### Mailboxes migrated from another provider (sent mail in a plain folder)
 
 The sync reads Inbox and Sent Items only. After a migration (e.g. Zoho → Microsoft 365 over IMAP) the old sent mail often sits in a plain folder called "Sent", "Sent Emails" or "Emails Sent", so replies in it would not count and those customers would look unanswered. Import those folders once:

@@ -187,6 +187,8 @@ export interface ThreadState {
 export interface StatusOptions extends DetectOptions {
   /** Reply SLA in business hours */
   slaHours: number;
+  /** Reply tracking starts here: inbound mail received earlier never waits for a reply (company setting) */
+  trackFrom?: Date | null;
   now?: Date;
 }
 
@@ -251,9 +253,12 @@ export function computeThreadStatus(
   let floor = current.status === "closed" && current.closedAt ? current.closedAt.getTime() : 0;
   if (decisionReset && decidedAt) floor = Math.max(floor, decidedAt.getTime());
   for (const m of real) if (isFromUs(m, opts.owners)) floor = Math.max(floor, effectiveTime(m).getTime());
+  if (opts.trackFrom) floor = Math.max(floor, opts.trackFrom.getTime() - 1);
   const pending = real.filter(
     (m) => !isFromUs(m, opts.owners) && !replyById.get(m.id)?.repliedAt && effectiveTime(m).getTime() > floor,
   );
+  // Everything still unanswered predates reply tracking: nobody is waiting on it.
+  if (opts.trackFrom && !pending.length) return none("no_reply_needed");
   const awaitingSince = pending[0] ? pending[0].receivedAt : latest.receivedAt;
   const overdueAt = addBusinessMinutes(awaitingSince, opts.slaHours * 60, opts.businessHours);
   return {

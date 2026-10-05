@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Download } from "lucide-react";
-import { domainOf, orgDomains } from "@email-tracker/core";
+import { domainOf, orgDomains, orgSettings, trackingStart } from "@email-tracker/core";
 import { ignoreSender } from "@/actions/rules";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -12,7 +12,7 @@ import { IgnoreMenu } from "@/components/shared/ignore-menu";
 import { RuleBanner } from "@/components/shared/rule-banner";
 import { Pagination, SortLink } from "@/components/shared/pagination";
 import { getTrackerPage } from "@/lib/data/tracker";
-import { parseFilters, withParams, type SearchParams } from "@/lib/filters";
+import { clampToTracking, parseFilters, withParams, type SearchParams } from "@/lib/filters";
 import { formatDateTime, formatMinutes } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -27,7 +27,8 @@ export default async function TrackerPage({ params, searchParams }: { params: Pr
   const sp = await searchParams;
   const { ctx, org } = await getCompanyContext(slug);
   const base = `/c/${slug}`;
-  const f = parseFilters(sp, org.timezone);
+  const trackFrom = trackingStart(org);
+  const f = clampToTracking(parseFilters(sp, org.timezone), trackFrom, org.timezone);
   const now = new Date();
   const { rows, total, pages } = await getTrackerPage(ctx, f, now);
   const tz = org.timezone;
@@ -40,6 +41,7 @@ export default async function TrackerPage({ params, searchParams }: { params: Pr
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-bold">Inbox Tracker</h1>
+        {trackFrom && <p className="text-sm text-muted-foreground">Reply tracking starts {orgSettings(org.settings).trackRepliesFrom} (Settings)</p>}
         <Button asChild variant="outline" size="sm"><a href={`${base}/tracker/export` + withParams(sp, {})} download data-testid="export-csv"><Download className="size-4" /> Export CSV</a></Button>
       </div>
       <FilterBar statuses={STATUSES} extra={<ExcludedToggle />} />

@@ -3,6 +3,7 @@ import { getEnv } from "../env.js";
 import { normalizeSubject } from "../mail/subject.js";
 import { DEFAULT_BUSINESS_HOURS, type BusinessHours } from "./business-hours.js";
 import { threadExclusion, type ExclusionAction } from "./exclusions.js";
+import { trackingStart } from "../org-settings.js";
 import { computeThreadStatus, detectReplies, type ReplyInputMessage, type ReplyResult } from "./replies.js";
 
 export interface Participant {
@@ -206,7 +207,7 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
     inputs,
     replies,
     { status: thread.status, needsReply: thread.needsReply, needsReplyDecidedAt: thread.needsReplyDecidedAt, closedAt: thread.closedAt },
-    { owners, businessHours, slaHours },
+    { owners, businessHours, slaHours, trackFrom: trackingStart(thread.mailbox.org) },
   );
   // A thread made only of excluded mail never waits for anyone, whatever we sent into it.
   const status = exclusionAction && computed.status !== "closed" ? { ...computed, status: "no_reply_needed" as const, awaitingSince: null, overdueAt: null } : computed;
@@ -284,12 +285,15 @@ export async function recomputeMailboxThreads(
   db: PrismaClient,
   mailboxId: string,
   onProgress?: (done: number, total: number) => void,
-): Promise<{ threads: number; messagesUpdated: number; byStatus: Record<string, number> }> {
+  /** stop once this passes (inside a web request); `partial` tells the caller to finish with `pnpm replies:recompute` */
+  deadlineAt?: Date,
+): Promise<{ threads: number; messagesUpdated: number; byStatus: Record<string, number>; partial: boolean }> {
   const threads = await db.thread.findMany({ where: { mailboxId }, select: { conversationId: true } });
   const byStatus: Record<string, number> = {};
   let messagesUpdated = 0;
   let done = 0;
   for (const t of threads) {
+    if (deadlineAt && Date.now() >= deadlineAt.getTime()) return { threads: done, messagesUpdated, byStatus, partial: true };
     const r = await recomputeThread(db, mailboxId, t.conversationId);
     if (r) {
       byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
@@ -298,5 +302,5 @@ export async function recomputeMailboxThreads(
     done += 1;
     if (onProgress && (done % 100 === 0 || done === threads.length)) onProgress(done, threads.length);
   }
-  return { threads: threads.length, messagesUpdated, byStatus };
+  return { threads: threads.length, messagesUpdated, byStatus, partial: false };
 }

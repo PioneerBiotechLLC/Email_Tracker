@@ -62,6 +62,8 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
                 <label className="block">Reply SLA (business hours)<input type="number" step="0.5" min="0.5" name="replySlaHours" defaultValue={s.org.replySlaHours ?? ""} placeholder="24 (from REPLY_SLA_HOURS)" className={field} /></label>
                 <label className="block">Summary language<select name="summaryLanguage" defaultValue={s.org.summaryLanguage} className={field}><option value="en">English</option><option value="ar">Arabic</option></select></label>
               </div>
+              <label className="block">Track replies from<input type="date" name="trackRepliesFrom" defaultValue={s.exclusions.settings.trackRepliesFrom ?? ""} className={field} />
+                <span className="mt-1 block text-xs text-muted-foreground">Emails received before this day never count as waiting for a reply, and Overview and Inbox Tracker start here. Older mail stays searchable and on the Threads page. Empty = all mail.</span></label>
             </SettingsForm>
           </CardContent>
         </Card>
