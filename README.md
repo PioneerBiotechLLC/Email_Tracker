@@ -257,7 +257,7 @@ pnpm --filter @email-tracker/core check:migration   # replays the AppUser → Me
 When two tracked mailboxes both receive an email (sales@ in To, regulatory@ in Cc), Microsoft 365 gives each mailbox its own copy and its own Graph id. Without help the tracker would count the email twice, show the thread twice and pay for two AI summaries. The sync now:
 
 - Records on every message which **other addresses inside the company's domains** (`Organization.domain` + `domains`) were in To/Cc: `Message.internalRecipients`. The thread page shows it as "Also to (in-company): …".
-- Links copies by their **RFC Message-ID**: one copy is the *primary* (the mailbox that was addressed directly wins over a Cc'd one; the sender's Sent Items copy wins for outgoing mail; ties go to the mailbox registered first) and the others get `duplicateOfId`. A colleague's reply-all that lands in a mailbox that was only Cc'd is a copy of the colleague's Sent Items row; an internal email addressed *To* a mailbox stays a real inbound request.
+- Links copies by their **RFC Message-ID**: one copy is the *primary* (the mailbox that was addressed directly wins over a Cc'd one; the sender's Sent Items copy wins for outgoing mail; ties go to the mailbox registered first) and the others get `duplicateOfId`. A colleague's reply-all that lands in a mailbox that was only Cc'd is a copy of the colleague's Sent Items row; an internal email addressed *To* a mailbox needs no reply when "Internal emails need no reply" is on (the default, see §9), and is a real inbound request when it is off.
 - Marks a thread whose messages are **all** copies of one thread in another mailbox as a copy of that thread (`Thread.duplicateOfId`). Copy threads inherit the primary thread's AI summary instead of being summarized again.
 - Treats **sent mail from any tracked mailbox of the company** as a reply candidate (headers or conversation match): an email a colleague answered is not "waiting for us". The tracker shows the answering mailbox.
 - Hides copies from the **All mailboxes** views and statistics (`mailboxScope` adds `duplicateOfId = null`). A single-mailbox view still shows everything that landed in that mailbox, with a "copy" notice linking to the primary thread.
@@ -317,13 +317,15 @@ Some mail should never be counted: GoDaddy account-activity notices, newsletters
 
 Every rule can carry a second condition, "…and subject contains", ANDed with the first (e.g. domain `microsoft.com` **and** subject contains `Microsoft 365`). While you type, the form shows *"This rule matches N emails in the last 90 days"*. Rules are deactivated, never deleted, and every change is written to the audit log. A company's own domains cannot be excluded.
 
-**Built-in detection** (on by default, two switches in the same Settings card) marks bulk and automatic mail `no_reply_needed` — never `ignore`, so nothing is hidden silently:
+**Built-in detection** (on by default, three switches in the same Settings card) marks internal, bulk and automatic mail `no_reply_needed` — never `ignore`, so nothing is hidden silently:
+
+- internal mail: the sender is in the company's own domains (`Organization.domain` + `domains`, exact match), i.e. a colleague, its own switch (`auto:internal`). Unlike other excluded mail it stays readable by Ask, thread summaries and period summaries (`READABLE`), and a colleague's email that also goes to someone outside the company counts as the company's reply;
 
 - headers: `List-Unsubscribe`, `List-Id`, `Precedence: bulk | list | junk`, `X-Auto-Response-Suppress` (`Auto-Submitted` mail was already treated as an auto-reply);
 - senders: `noreply@`, `no-reply@`, `donotreply@`, `notifications@`, `mailer-daemon@`, `postmaster@`;
 - Outlook's Focused Inbox: mail Outlook filed under **Other** (Graph `inferenceClassification`), its own switch.
 
-Each excluded email stores why (`Message.excludedBy`: a rule id, or `auto:list-unsubscribe`, `auto:noreply`, `auto:focused-other`, …) and the badge shows it. When several rules match, a mailbox's own rule wins, then `ignore` over `no_reply_needed`, then the oldest rule; rules win over built-in detection.
+Each excluded email stores why (`Message.excludedBy`: a rule id, or `auto:internal`, `auto:list-unsubscribe`, `auto:noreply`, `auto:focused-other`, …) and the badge shows it. When several rules match, a mailbox's own rule wins, then `ignore` over `no_reply_needed`, then the oldest rule; rules win over built-in detection.
 
 **How it is applied**
 

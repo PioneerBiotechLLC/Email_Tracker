@@ -7,6 +7,8 @@ const schema = z.object({
   autoExclude: z.boolean().catch(true),
   /** Treat mail that Outlook's Focused Inbox files under "Other" as no_reply_needed */
   outlookOtherNoReply: z.boolean().catch(true),
+  /** Mail from a colleague (sender in the company's own domains) needs no reply */
+  internalNoReply: z.boolean().catch(true),
   /** Index words from email bodies for search; false = subject and participants only */
   searchIndexBodies: z.boolean().catch(true),
   /** Reply tracking starts on this local day (YYYY-MM-DD, company timezone); earlier emails never wait for a reply. null = all mail */

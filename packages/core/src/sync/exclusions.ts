@@ -44,6 +44,10 @@ export interface ExclusionInput {
 export interface ExclusionSettings {
   autoExclude: boolean;
   outlookOtherNoReply: boolean;
+  /** mail from the company's own domains (a colleague) needs no reply */
+  internalNoReply?: boolean;
+  /** the company's email domains, lower-case (needed for internalNoReply) */
+  companyDomains?: ReadonlySet<string>;
 }
 
 export interface Exclusion {
@@ -156,8 +160,16 @@ export function isNoReplySender(address: string): boolean {
   return at > 0 && NOREPLY_LOCAL_RE.test(a.slice(0, at));
 }
 
-/** Built-in detection: the first signal that marks the message as bulk / automatic, as "auto:<signal>". */
+/** Whether the sender is a colleague: the address is in one of the company's own domains. */
+export function isInternalSender(address: string, companyDomains: ReadonlySet<string> | undefined): boolean {
+  const a = lower(address);
+  const at = a.lastIndexOf("@");
+  return at > 0 && !!companyDomains?.has(a.slice(at + 1));
+}
+
+/** Built-in detection: the first signal that marks the message as internal, bulk or automatic, as "auto:<signal>". */
 export function autoSignal(msg: Pick<ExclusionInput, "fromAddress" | "autoSignals" | "inferenceClassification">, settings: ExclusionSettings): string | null {
+  if (settings.internalNoReply && isInternalSender(msg.fromAddress, settings.companyDomains)) return INTERNAL_SIGNAL;
   if (settings.autoExclude) {
     if (msg.autoSignals.length) return `auto:${msg.autoSignals[0]}`;
     if (isNoReplySender(msg.fromAddress)) return "auto:noreply";
@@ -183,8 +195,20 @@ export function threadExclusion(inbound: (ExclusionAction | null)[]): ExclusionA
   return inbound.every((a) => a === "ignore") ? "ignore" : "no_reply_needed";
 }
 
-/** Prisma `where` fragment for statistics (KPIs, digests, the AI): only mail that is not excluded at all. */
+/** Prisma `where` fragment for reply statistics (KPIs, the tracker): only mail that is not excluded at all. */
 export const COUNTED = { exclusionAction: null } as const;
+
+/** Signal of mail sent by a colleague: excluded from reply tracking only. */
+export const INTERNAL_SIGNAL = "auto:internal";
+
+/**
+ * Prisma `where` fragment for what the AI and Ask read: mail that is not excluded, plus colleagues'
+ * mail (it is real content; it just needs no reply). Use it inside `AND: [...]` next to other ORs.
+ */
+export const READABLE = { OR: [{ exclusionAction: null }, { excludedBy: INTERNAL_SIGNAL }] };
+
+/** Whether an excluded message is still read by the AI and Ask (see READABLE). */
+export const isReadable = (m: { exclusionAction: string | null; excludedBy: string | null }) => !m.exclusionAction || m.excludedBy === INTERNAL_SIGNAL;
 
 /**
  * Prisma `where` fragment for list views of threads or messages: mail excluded
@@ -195,6 +219,7 @@ export function listVisibility(showExcluded: boolean): { OR: ({ exclusionAction:
 }
 
 const AUTO_LABEL: Record<string, string> = {
+  [INTERNAL_SIGNAL]: "internal email (sent by a colleague)",
   "auto:list-unsubscribe": "mailing list (List-Unsubscribe header)",
   "auto:list-id": "mailing list (List-Id header)",
   "auto:precedence-bulk": "bulk mail (Precedence header)",

@@ -239,7 +239,20 @@ try {
   await syncMailbox(mb2.id, { provider: new FakeProvider([...regInbox, direct], []), reset: true });
   const m8 = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m8" } });
   const tDirect = await db.thread.findUniqueOrThrow({ where: { mailboxId_conversationId: { mailboxId: mb2.id, conversationId: "conv-3" } } });
-  assert(m8.duplicateOfId === null && tDirect.duplicateOfId === null && tDirect.status === "awaiting_us", "an internal email addressed To the colleague stays a real inbound request");
+  assert(m8.duplicateOfId === null && m8.excludedBy === "auto:internal" && tDirect.duplicateOfId === null && tDirect.status === "no_reply_needed" && tDirect.category === "internal", `an email between colleagues needs no reply and is categorised internal (${tDirect.status}, ${tDirect.category})`);
+  await db.organization.update({ where: { id: org.id }, data: { settings: { internalNoReply: false } } });
+  await reapplyExclusions(db, org.id);
+  assert((await db.thread.findUniqueOrThrow({ where: { id: tDirect.id } })).status === "awaiting_us", "with internal detection switched off, an internal email addressed To the colleague is a real request");
+  await db.organization.update({ where: { id: org.id }, data: { settings: {} } });
+  await reapplyExclusions(db, org.id);
+  // A colleague whose mailbox is not tracked answers the customer with us in Cc: that is the company replying.
+  const ceoReply = msg({ id: "m9", subject: "RE: PO 4512 – Paracetamol", receivedAt: d("2026-09-02T12:00:00Z"), from: { address: "ceo@example-pharma.com", name: "CEO" },
+    to: [{ address: "ali@customer.com", name: "Ali" }], cc: [{ address: OWNER, name: "Sales" }], headers: [{ name: "In-Reply-To", value: "<m3@x>" }] });
+  await syncMailbox(mb.id, { provider: new FakeProvider([...inbox, ceoReply]), reset: true });
+  const m9 = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m9" } });
+  assert(m9.excludedBy === "auto:internal" && (await db.message.findUniqueOrThrow({ where: { graphMessageId: "m3" } })).repliedByMessageId === m9.id, "a colleague's reply to the customer (we were Cc'd) answers the customer's email");
+  await db.message.delete({ where: { id: m9.id } });
+  await recomputeThread(db, mb.id, "conv-1");
 
   // Period summary (mocked client): figures from the DB, text from the model.
   console.log("period summary (mocked client)");

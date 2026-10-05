@@ -101,6 +101,14 @@ describe("built-in detection", () => {
     expect(evaluateExclusion(msg({ fromAddress: "noreply@portal.com" }), [], ON)).toEqual({ excludedBy: "auto:noreply", exclusionAction: "no_reply_needed" });
     expect(evaluateExclusion(msg(), [], ON)).toEqual({ excludedBy: null, exclusionAction: null });
   });
+  it("mail from a colleague (the company's own domains, subdomains not included) needs no reply, when switched on", () => {
+    const company = { ...ON, internalNoReply: true, companyDomains: new Set(["api-pharma.net"]) };
+    expect(evaluateExclusion(msg({ fromAddress: "Rahma@API-Pharma.net" }), [], company)).toEqual({ excludedBy: "auto:internal", exclusionAction: "no_reply_needed" });
+    expect(autoSignal(msg({ fromAddress: "ali@customer.com" }), company)).toBeNull();
+    expect(autoSignal(msg({ fromAddress: "it@mail.api-pharma.net" }), company)).toBeNull();
+    expect(autoSignal(msg({ fromAddress: "rahma@api-pharma.net" }), { ...company, internalNoReply: false })).toBeNull();
+    expect(exclusionReason("auto:internal")).toBe("auto: internal email (sent by a colleague)");
+  });
   it("Outlook 'Other' is its own setting", () => {
     const other = msg({ inferenceClassification: "Other" });
     expect(autoSignal(other, ON)).toBe("auto:focused-other");

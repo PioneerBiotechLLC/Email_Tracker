@@ -6,6 +6,7 @@
 import type { Prisma, PrismaClient } from "../db.js";
 import { createLogger } from "../log.js";
 import { orgSettings } from "../org-settings.js";
+import { orgDomains } from "./dedupe.js";
 import { evaluateExclusion, matchesRule, orderRules, type ExclusionAction, type ExclusionSettings, type RuleLike, type RuleType } from "./exclusions.js";
 import { recomputeThread } from "./threads.js";
 
@@ -20,10 +21,10 @@ export interface ExclusionContext {
 /** A company's active rules and detection settings. Always scoped by orgId: one company's rules never see another's mail. */
 export async function loadExclusionContext(db: PrismaClient, orgId: string): Promise<ExclusionContext> {
   const [org, rules] = await Promise.all([
-    db.organization.findUniqueOrThrow({ where: { id: orgId }, select: { settings: true } }),
+    db.organization.findUniqueOrThrow({ where: { id: orgId }, select: { settings: true, domain: true, domains: true } }),
     db.exclusionRule.findMany({ where: { orgId, isActive: true }, select: { id: true, mailboxId: true, type: true, value: true, andSubjectContains: true, action: true, createdAt: true } }),
   ]);
-  return { rules: orderRules(rules), settings: orgSettings(org.settings) };
+  return { rules: orderRules(rules), settings: { ...orgSettings(org.settings), companyDomains: orgDomains(org) } };
 }
 
 export interface ReapplyOptions {

@@ -13,6 +13,7 @@ import { formatLocalDate } from "../ai/prompts.js";
 import { readBody } from "../crypto.js";
 import { Prisma, type PrismaClient } from "../db.js";
 import { zonedTimeToUtc } from "../sync/business-hours.js";
+import { INTERNAL_SIGNAL, READABLE } from "../sync/exclusions.js";
 import { searchPlans, snippet } from "./text.js";
 
 export interface AskScope {
@@ -135,7 +136,7 @@ function dateRange(scope: AskScope, after?: string, before?: string): { gte?: Da
 
 /** Conditions every email search shares. Copies of an email in other mailboxes are skipped when more than one mailbox is searched. */
 function emailConditions(scope: AskScope, mailboxIds: string[], range: { gte?: Date; lte?: Date }): Prisma.Sql[] {
-  const conds = [Prisma.sql`m."mailboxId" = ANY(${mailboxIds}::text[])`, Prisma.sql`m."isAutoReply" = false`, Prisma.sql`m."exclusionAction" IS NULL`];
+  const conds = [Prisma.sql`m."mailboxId" = ANY(${mailboxIds}::text[])`, Prisma.sql`m."isAutoReply" = false`, Prisma.sql`(m."exclusionAction" IS NULL OR m."excludedBy" = ${INTERNAL_SIGNAL})`];
   if (mailboxIds.length > 1) conds.push(Prisma.sql`m."duplicateOfId" IS NULL`);
   if (scope.threadId) conds.push(Prisma.sql`m."threadId" = ${scope.threadId}`);
   if (range.gte) conds.push(Prisma.sql`m."receivedAt" >= ${range.gte}`);
@@ -194,7 +195,7 @@ const mailboxAddress = (scope: AskScope, id: string) => scope.mailboxes.find((m)
 async function loadMessages(db: PrismaClient, scope: AskScope, ids: string[]): Promise<Row[]> {
   if (!ids.length) return [];
   const allowed = new Set(mailboxIdsFor(scope));
-  const rows = await db.message.findMany({ where: { id: { in: ids }, mailboxId: { in: [...allowed] }, isAutoReply: false, exclusionAction: null, ...(scope.threadId ? { threadId: scope.threadId } : {}) }, select: messageSelect });
+  const rows = await db.message.findMany({ where: { id: { in: ids }, mailboxId: { in: [...allowed] }, isAutoReply: false, ...READABLE, ...(scope.threadId ? { threadId: scope.threadId } : {}) }, select: messageSelect });
   const byId = new Map(rows.filter((m) => allowed.has(m.mailboxId)).map((m) => [m.id, m]));
   return ids.map((id) => byId.get(id)).filter((m): m is Row => !!m);
 }
@@ -203,7 +204,7 @@ async function searchThreads(db: PrismaClient, scope: AskScope, input: z.infer<t
   const limit = input.limit ?? 5;
   const mailboxIds = mailboxIdsFor(scope);
   const range = dateRange(scope, input.after, input.before);
-  const conds = [Prisma.sql`t."mailboxId" = ANY(${mailboxIds}::text[])`, Prisma.sql`t."exclusionAction" IS NULL`];
+  const conds = [Prisma.sql`t."mailboxId" = ANY(${mailboxIds}::text[])`, Prisma.sql`(t."exclusionAction" IS NULL OR EXISTS (SELECT 1 FROM "Message" x WHERE x."threadId" = t."id" AND x."excludedBy" = ${INTERNAL_SIGNAL}))`];
   if (mailboxIds.length > 1) conds.push(Prisma.sql`t."duplicateOfId" IS NULL`);
   if (scope.threadId) conds.push(Prisma.sql`t."id" = ${scope.threadId}`);
   if (range.gte) conds.push(Prisma.sql`t."lastMessageAt" >= ${range.gte}`);
@@ -222,7 +223,7 @@ async function searchThreads(db: PrismaClient, scope: AskScope, input: z.infer<t
   const threads = ids.length
     ? await db.thread.findMany({
         where: { id: { in: ids }, mailboxId: { in: mailboxIds } },
-        select: { id: true, mailboxId: true, subject: true, status: true, summary: true, nextAction: true, messageCount: true, lastMessageAt: true, messages: { where: { isAutoReply: false, exclusionAction: null }, orderBy: { receivedAt: "desc" }, take: 1, select: { id: true } } },
+        select: { id: true, mailboxId: true, subject: true, status: true, summary: true, nextAction: true, messageCount: true, lastMessageAt: true, messages: { where: { isAutoReply: false, ...READABLE }, orderBy: { receivedAt: "desc" }, take: 1, select: { id: true } } },
       })
     : [];
   const byId = new Map(threads.filter((t) => allowed.has(t.mailboxId)).map((t) => [t.id, t]));
@@ -257,7 +258,7 @@ async function getThread(db: PrismaClient, scope: AskScope, input: z.infer<typeo
   const allowed = mailboxIdsFor(scope);
   const thread = await db.thread.findUnique({ where: { id: input.threadId }, select: { id: true, mailboxId: true } });
   if (!thread || !allowed.includes(thread.mailboxId) || (scope.threadId && scope.threadId !== thread.id)) return { content: JSON.stringify({ error: "Thread not found." }), isError: true, messageIds: [] };
-  const all = await db.message.findMany({ where: { threadId: thread.id, isAutoReply: false, exclusionAction: null }, orderBy: { receivedAt: "asc" }, select: messageSelect });
+  const all = await db.message.findMany({ where: { threadId: thread.id, isAutoReply: false, ...READABLE }, orderBy: { receivedAt: "asc" }, select: messageSelect });
   // Long thread: the first email (the original request) and the most recent ones.
   const rows = all.length > maxMessages ? [all[0]!, ...all.slice(all.length - (maxMessages - 1))].slice(0, maxMessages) : all;
   const full = all.length > maxMessages ? new Set([rows[0]!.id, rows[rows.length - 1]!.id]) : new Set<string>();
