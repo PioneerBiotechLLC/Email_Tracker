@@ -20,6 +20,8 @@ export interface AskChatProps {
   initialQuestion: string;
   models: { chat: string; deep: string; deepCostFactor: number };
   maxTurns: number;
+  /** pre-filled From / to dates (YYYY-MM-DD); empty when asking about one thread */
+  defaultRange: { after: string; before: string };
 }
 
 const field = "h-9 rounded-md border bg-background px-2 text-sm";
@@ -76,7 +78,7 @@ function Turn({ turn, slug, orgId }: { turn: AskTurn; slug: string; orgId: strin
   );
 }
 
-export function AskChat({ slug, orgId, sessions, session, mailboxes, thread, initialQuestion, models, maxTurns }: AskChatProps) {
+export function AskChat({ slug, orgId, sessions, session, mailboxes, thread, initialQuestion, models, maxTurns, defaultRange }: AskChatProps) {
   const router = useRouter();
   const base = `/c/${slug}/ask`;
   const [turns, setTurns] = useState<AskTurn[]>(session?.turns ?? []);
@@ -84,7 +86,7 @@ export function AskChat({ slug, orgId, sessions, session, mailboxes, thread, ini
   const [question, setQuestion] = useState(initialQuestion);
   const [pending, setPending] = useState<{ question: string; status: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState({ mailboxId: "", after: "", before: "", deep: false });
+  const [filters, setFilters] = useState({ mailboxId: "", ...defaultRange, deep: false });
   const [historyOpen, setHistoryOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const full = turns.length >= maxTurns;
