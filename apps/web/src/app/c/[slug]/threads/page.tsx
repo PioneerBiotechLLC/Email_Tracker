@@ -11,7 +11,7 @@ import { getCompanyContext } from "@/lib/session";
 export const metadata = { title: "Threads" };
 const STATUSES = [
   { value: "overdue", label: "Overdue" }, { value: "awaiting_us", label: "Awaiting our reply" }, { value: "awaiting_them", label: "Waiting on them" },
-  { value: "no_reply_needed", label: "No reply needed" }, { value: "closed", label: "Closed" }, { value: "summary_pending", label: "Summary pending" }, { value: "summary_error", label: "Summary error" },
+  { value: "no_reply_needed", label: "No reply needed" }, { value: "closed", label: "Closed" }, { value: "summary_pending", label: "No summary" }, { value: "summary_error", label: "Summary error" },
 ];
 
 function participants(json: unknown, mailbox: string): string {
@@ -46,10 +46,8 @@ export default async function ThreadsPage({ params, searchParams }: { params: Pr
               {t.summary ? (
                 <p className="line-clamp-2 text-sm" dir="auto">{t.summary}{t.messageCount > t.summaryMessageCount && <span className="ml-1 text-xs text-muted-foreground">(new messages since summary)</span>}</p>
               ) : t.summaryError ? (
-                <p className="text-sm text-status-bad">Summary error — will be retried. <span className="text-muted-foreground">{t.summaryError.replace(/^\S+\s/, "").slice(0, 80)}</span></p>
-              ) : t.exclusionAction ? null : (
-                <p className="text-sm italic text-muted-foreground">Summary pending</p>
-              )}
+                <p className="text-sm text-status-bad">Summary error. <span className="text-muted-foreground">{t.summaryError.replace(/^\S+\s/, "").slice(0, 80)}</span></p>
+              ) : null}
               {t.nextAction && <p className="text-sm" dir="auto"><span className="font-medium">Next:</span> {t.nextAction}</p>}
             </li>
           ))}

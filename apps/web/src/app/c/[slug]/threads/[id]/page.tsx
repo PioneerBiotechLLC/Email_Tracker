@@ -66,7 +66,9 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
             {thread.needsReply
               ? <ConfirmForm action={setNeedsReply.bind(null, thread.id, false)} confirmText="Mark as 'no reply needed'? This stays until a new email arrives in the thread.">No reply needed</ConfirmForm>
               : <ConfirmForm action={setNeedsReply.bind(null, thread.id, true)} confirmText="Mark this thread as needing a reply?">Needs reply</ConfirmForm>}
-            <ConfirmForm action={resummarizeThread.bind(null, thread.id)} confirmText="Re-summarize with Claude now? This uses one AI call (counts toward the daily cap).">Re-summarize</ConfirmForm>
+            {!thread.exclusionAction && !thread.duplicateOf && (thread.summary
+              ? <ConfirmForm action={resummarizeThread.bind(null, thread.id)} confirmText="Re-summarize with Claude now? This uses one AI call (counts toward the daily cap).">Re-summarize</ConfirmForm>
+              : <ConfirmForm action={resummarizeThread.bind(null, thread.id)} confirmText="Summarize this thread with Claude now? This uses one AI call (counts toward the daily cap).">Summarize</ConfirmForm>)}
           </div>
         )}
       </div>
@@ -140,7 +142,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
                   <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-muted-foreground">
                     <dt>Needs reply</dt><dd>{thread.needsReply ? "Yes" : "No"}{thread.needsReplyDecidedBy && ` (${thread.needsReplyDecidedBy})`}</dd>
                     <dt>Language</dt><dd>{thread.summaryLang ?? "–"}</dd>
-                    <dt>Updated</dt><dd>{formatDateTime(thread.summaryUpdatedAt, tz, now)}{thread.messageCount > thread.summaryMessageCount && " · new messages since"}</dd>
+                    <dt>Updated</dt><dd>{formatDateTime(thread.summaryUpdatedAt, tz, now)}{thread.messageCount > thread.summaryMessageCount && " · new messages since (Re-summarize to include them)"}</dd>
                     <dt>Model</dt><dd>{thread.summaryModel ?? "–"}</dd>
                   </dl>
                 </>
@@ -148,7 +150,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
                 <p className="text-status-bad">Summary failed: {thread.summaryError.replace(/^\S+\s/, "")}</p>
               ) : thread.exclusionAction ? (
                 <p className="text-muted-foreground">Excluded mail is not summarized.</p>
-              ) : <p className="italic text-muted-foreground">Summary pending — it is generated a couple of minutes after the last message.</p>}
+              ) : <p className="italic text-muted-foreground">No AI summary yet. Summaries are made on request{isAdmin ? ": use Summarize above (one AI call)." : " by a company admin."}</p>}
               {thread.summaryError && thread.summary && <p className="text-xs text-status-bad">Last attempt failed: {thread.summaryError.replace(/^\S+\s/, "").slice(0, 120)}</p>}
             </CardContent>
           </Card>

@@ -34,7 +34,7 @@ test("thread detail opens from the threads list", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1 })).toContainText(subject!.slice(0, 20));
   await expect(page.getByLabel("Messages").locator("article").first()).toBeVisible();
   await expect(page.getByText("AI summary")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Re-summarize" })).toBeVisible(); // admin actions present
+  await expect(page.getByRole("button", { name: /^(Re-summarize|Summarize)$/ })).toBeVisible(); // admin actions present
 });
 
 test("CSV export downloads a UTF-8 file with a BOM and header row", async ({ page }) => {
@@ -190,7 +190,7 @@ test("a company the user does not belong to is a 404, as is an unknown slug", as
 test("machine endpoints reject bad callers", async ({ request }) => {
   const cron = await request.get("/api/cron/sync");
   expect(cron.status()).toBe(401);
-  const wrongSecret = await request.get("/api/cron/summarize", { headers: { Authorization: "Bearer nope-nope-nope-nope-nope" } });
+  const wrongSecret = await request.get("/api/cron/sync", { headers: { Authorization: "Bearer nope-nope-nope-nope-nope" } });
   expect(wrongSecret.status()).toBe(401);
   const badState = await request.post("/api/graph/webhook", { data: { value: [{ subscriptionId: "s1", clientState: "wrong", changeType: "created" }] } });
   expect(badState.status()).toBe(401);

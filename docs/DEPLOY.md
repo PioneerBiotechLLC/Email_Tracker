@@ -2,7 +2,7 @@
 
 Follow top to bottom. Nothing here needs code changes. Commands run on your laptop from the repo root unless stated otherwise. Values you generate once: `openssl rand -base64 32` (AUTH_SECRET), `openssl rand -hex 32` (CRON_SECRET, GRAPH_CLIENT_STATE).
 
-**Architecture in one paragraph.** The dashboard and all live-sync endpoints run on Vercel (serverless). Microsoft Graph pushes change notifications to `/api/graph/webhook`; every 15 minutes a GitHub Actions job calls `/api/cron/sync` and `/api/cron/summarize` as a safety net; Vercel's daily crons renew Graph subscriptions and purge old rows. Heavy one-off jobs (the initial 90-day backfill and the AI batch backfill) run from your laptop against the production database. Mailboxes stay read-only (`Mail.Read`).
+**Architecture in one paragraph.** The dashboard and all live-sync endpoints run on Vercel (serverless). Microsoft Graph pushes change notifications to `/api/graph/webhook`; every 15 minutes a GitHub Actions job calls `/api/cron/sync` as a safety net; AI summaries are only made on request (thread page, or the CLI); Vercel's daily crons renew Graph subscriptions and purge old rows. Heavy one-off jobs (the initial 90-day backfill and the AI batch backfill) run from your laptop against the production database. Mailboxes stay read-only (`Mail.Read`).
 
 ## a. Neon database
 
@@ -109,6 +109,7 @@ Migrations are never run by the Vercel build. Run `pnpm db:deploy` yourself afte
    pnpm folders:list sales@<company-domain>                # migrated mailbox? old sent mail in a plain "Sent" folder
    pnpm folders:import all --org <company>                # …then load it as sent mail (README §8)
    pnpm replies:report sales@<company-domain> --days 30   # sanity check against Outlook
+   # Optional, costs money: summaries are otherwise made only on request (thread page → Summarize)
    pnpm ai:backfill sales@<company-domain> --dry-run      # shows thread count + estimated cost, no spend
    pnpm ai:backfill sales@<company-domain>                # Batch API (50% cheaper); waits and saves results
    ```
@@ -121,7 +122,7 @@ Repo → Settings → Secrets and variables → Actions → **New repository sec
 - `APP_URL` = `https://<your-domain>`
 - `CRON_SECRET` = the same value as in Vercel
 
-The workflow `.github/workflows/cron.yml` then calls `/api/cron/sync` and `/api/cron/summarize` every 15 minutes. Check Actions → cron for green runs. (On Vercel Pro you can instead add both paths to `apps/web/vercel.json` with schedule `*/15 * * * *` and delete the workflow.)
+The workflow `.github/workflows/cron.yml` then calls `/api/cron/sync` every 15 minutes. Check Actions → cron for green runs. (On Vercel Pro you can instead add that path to `apps/web/vercel.json` with schedule `*/15 * * * *` and delete the workflow.)
 
 ## g. Verify
 

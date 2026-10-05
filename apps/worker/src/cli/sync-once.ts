@@ -14,8 +14,10 @@ const program = new Command()
   .argument("<email>", "registered mailbox address, or 'all' for every active mailbox")
   .option("--reset", "ignore saved delta links and re-run the full backfill", false)
   .option("--days <n>", "backfill window in days (default: BACKFILL_DAYS)", (v: string) => Number(v))
-  .option("--no-ai", "skip Claude summaries for the touched threads")
-  .action(async (email: string, opts: { reset: boolean; days?: number; ai: boolean }) => {
+  // Summaries are made on request only; --no-ai is still accepted (it is the default) so older instructions keep working.
+  .option("--ai", "also summarize the touched threads with Claude (costs money; default: no summaries)")
+  .option("--no-ai", "no summaries (the default)")
+  .action(async (email: string, opts: { reset: boolean; days?: number; ai?: boolean }) => {
     const db = getDb();
     const one = email === "all" ? null : await db.mailbox.findUnique({ where: { emailAddress: email.toLowerCase() } });
     if (email !== "all" && !one) {
