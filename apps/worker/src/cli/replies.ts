@@ -1,6 +1,9 @@
 import { Command } from "commander";
 import { dedupeOrgMessages, disconnectDb, getDb, recomputeMailboxThreads, type PrismaClient } from "@email-tracker/core";
 
+/** Threads recomputed in parallel: each needs several round trips to the database, so the run is network-bound. */
+const CONCURRENCY = 6;
+
 const program = new Command().name("replies").description("Reply-tracking maintenance and reports");
 
 async function targets(db: PrismaClient, email: string) {
@@ -16,6 +19,7 @@ program
   .option("--no-dedupe", "skip the duplicate / internal-recipient pass")
   .action(async (email: string, opts: { dedupe: boolean }) => {
     const db = getDb();
+    let failures = 0;
     const mailboxes = await targets(db, email);
     if (opts.dedupe) {
       for (const orgId of new Set(mailboxes.map((m) => m.orgId))) {
@@ -27,10 +31,16 @@ program
     }
     for (const mb of mailboxes) {
       const started = Date.now();
-      const r = await recomputeMailboxThreads(db, mb.id, (done, total) => console.log(`  ${mb.emailAddress}: ${done}/${total} threads`));
+      const r = await recomputeMailboxThreads(db, mb.id, (done, total) => console.log(`  ${mb.emailAddress}: ${done}/${total} threads`), undefined, CONCURRENCY);
       const by = Object.entries(r.byStatus).map(([k, v]) => `${k}=${v}`).join(", ");
       console.log(`${mb.emailAddress}: ${r.threads} threads, ${r.messagesUpdated} messages updated (${by}) in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      if (r.failed.length) {
+        failures += r.failed.length;
+        console.log(`  ${r.failed.length} thread(s) failed and were skipped (re-run to retry):`);
+        for (const f of r.failed.slice(0, 5)) console.log(`    ${f.error.split("\n").filter(Boolean).pop()}`);
+      }
     }
+    if (failures) process.exitCode = 1;
   });
 
 function fmtMinutes(min: number | null): string {

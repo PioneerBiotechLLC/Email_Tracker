@@ -83,6 +83,22 @@ function toReplyInput(m: DbMessage): ReplyInputMessage {
   };
 }
 
+/** `timestamp(3)` literal in UTC (how Prisma stores DateTime), or null. */
+const utcTimestamp = (d: Date | null) => (d ? d.toISOString().replace("T", " ").replace("Z", "") : null);
+
+/** Writes the reply fields of several messages in one UPDATE … FROM unnest(…). */
+function writeReplyFields(db: PrismaClient, rows: ReplyResult[]): Prisma.PrismaPromise<number> {
+  return db.$executeRaw`
+    UPDATE "Message" AS m SET
+      "repliedAt" = v.replied_at, "repliedByMessageId" = v.replied_by, "replyMethod" = v.method::"ReplyMethod",
+      "responseMinutes" = v.raw_minutes, "responseBusinessMinutes" = v.business_minutes
+    FROM unnest(
+      ${rows.map((r) => r.messageId)}::text[], ${rows.map((r) => utcTimestamp(r.repliedAt))}::timestamp(3)[], ${rows.map((r) => r.repliedByMessageId)}::text[],
+      ${rows.map((r) => r.replyMethod)}::text[], ${rows.map((r) => r.responseMinutes)}::int[], ${rows.map((r) => r.responseBusinessMinutes)}::int[]
+    ) AS v(id, replied_at, replied_by, method, raw_minutes, business_minutes)
+    WHERE m."id" = v.id`;
+}
+
 function replyChanged(m: DbMessage, r: ReplyResult): boolean {
   return (
     (m.repliedAt?.getTime() ?? null) !== (r.repliedAt?.getTime() ?? null) ||
@@ -272,25 +288,11 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
   // A thread made only of excluded mail never waits for anyone, whatever we sent into it.
   const status = exclusionAction && computed.status !== "closed" ? { ...computed, status: "no_reply_needed" as const, awaitingSince: null, overdueAt: null } : computed;
 
+  const changedReplies = replies.filter((r, i) => replyChanged(messages[i]!, r));
   const updates: Prisma.PrismaPromise<unknown>[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i]!;
-    const r = replies[i]!;
-    if (!replyChanged(m, r)) continue;
-    updates.push(
-      db.message.update({
-        where: { id: m.id },
-        data: {
-          repliedAt: r.repliedAt,
-          repliedByMessageId: r.repliedByMessageId,
-          replyMethod: r.replyMethod,
-          responseMinutes: r.responseMinutes,
-          responseBusinessMinutes: r.responseBusinessMinutes,
-        },
-      }),
-    );
-  }
-
+  // All changed messages in ONE statement: one UPDATE per email inside the transaction could outlast
+  // Prisma's 5-second transaction limit on a long thread over a slow connection.
+  if (changedReplies.length) updates.push(writeReplyFields(db, changedReplies));
   updates.push(
     db.thread.update({
       where: { id: thread.id },
@@ -316,7 +318,7 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
     }),
   );
   await db.$transaction(updates);
-  return { threadId: thread.id, status: status.status, messagesUpdated: updates.length - 1, duplicateOfId, exclusionAction };
+  return { threadId: thread.id, status: status.status, messagesUpdated: changedReplies.length, duplicateOfId, exclusionAction };
 }
 
 /**
@@ -347,20 +349,37 @@ export async function recomputeMailboxThreads(
   onProgress?: (done: number, total: number) => void,
   /** stop once this passes (inside a web request); `partial` tells the caller to finish with `pnpm replies:recompute` */
   deadlineAt?: Date,
-): Promise<{ threads: number; messagesUpdated: number; byStatus: Record<string, number>; partial: boolean }> {
+  /** threads recomputed at the same time: the work is mostly waiting on the database, so a few in parallel go much faster */
+  concurrency = 1,
+): Promise<{ threads: number; messagesUpdated: number; byStatus: Record<string, number>; partial: boolean; failed: { conversationId: string; error: string }[] }> {
   const threads = await db.thread.findMany({ where: { mailboxId }, select: { conversationId: true } });
   const byStatus: Record<string, number> = {};
+  const failed: { conversationId: string; error: string }[] = [];
   let messagesUpdated = 0;
   let done = 0;
-  for (const t of threads) {
-    if (deadlineAt && Date.now() >= deadlineAt.getTime()) return { threads: done, messagesUpdated, byStatus, partial: true };
-    const r = await recomputeThread(db, mailboxId, t.conversationId);
-    if (r) {
-      byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
-      messagesUpdated += r.messagesUpdated;
+  let next = 0;
+  let partial = false;
+  const worker = async () => {
+    while (next < threads.length) {
+      if (deadlineAt && Date.now() >= deadlineAt.getTime()) {
+        partial = true;
+        return;
+      }
+      const t = threads[next++]!;
+      try {
+        const r = await recomputeThread(db, mailboxId, t.conversationId);
+        if (r) {
+          byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
+          messagesUpdated += r.messagesUpdated;
+        }
+      } catch (err) {
+        // One bad thread must not stop the run: it is reported, and a re-run retries it.
+        failed.push({ conversationId: t.conversationId, error: err instanceof Error ? err.message.slice(0, 300) : String(err) });
+      }
+      done += 1;
+      if (onProgress && (done % 100 === 0 || done === threads.length)) onProgress(done, threads.length);
     }
-    done += 1;
-    if (onProgress && (done % 100 === 0 || done === threads.length)) onProgress(done, threads.length);
-  }
-  return { threads: threads.length, messagesUpdated, byStatus, partial: false };
+  };
+  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
+  return { threads: done, messagesUpdated, byStatus, partial, failed };
 }
