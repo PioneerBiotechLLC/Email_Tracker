@@ -1,7 +1,7 @@
 import "server-only";
 import { createLogger, getDb, getEnv, relinkRecentCopies, syncMailboxLocked } from "@email-tracker/core";
 
-/** How far back the copy sweep looks: copies arrive within seconds, three days covers retries and outages. */
+/** How far back the copy sweep looks: copies arrive within seconds; three days also covers retries and outages. */
 const RELINK_DAYS = 3;
 
 const log = createLogger("webhook");
