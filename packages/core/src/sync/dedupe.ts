@@ -14,7 +14,7 @@
  * Pure helpers first (unit-tested), DB wrappers below.
  */
 import type { Prisma, PrismaClient } from "../db.js";
-import { ownerAddresses } from "./threads.js";
+import { ownerAddresses, recomputeThread } from "./threads.js";
 
 export interface RecipientLike {
   address: string;
@@ -256,4 +256,21 @@ export async function dedupeOrgMessages(db: PrismaClient, orgId: string, onProgr
     out.linksChanged += stale.length;
   }
   return out;
+}
+
+/**
+ * Re-links copies of recent emails across the company's mailboxes and recomputes the threads that changed.
+ * One email delivered to several tracked mailboxes triggers their syncs at the same moment (one webhook
+ * per mailbox); each sync can look for the other copies before those are stored, so none gets linked.
+ * Running this after every sync closes that gap: the last sync to finish (or the next cron run) links them.
+ */
+export async function relinkRecentCopies(db: PrismaClient, orgId: string, since: Date): Promise<{ threadsRecomputed: number }> {
+  const groups = await db.message.groupBy({
+    by: ["internetMessageId"],
+    where: { mailbox: { orgId }, receivedAt: { gte: since }, internetMessageId: { not: null } },
+    having: { internetMessageId: { _count: { gt: 1 } } },
+  });
+  const { changed } = await dedupeMessageIds(db, orgId, groups.map((g) => g.internetMessageId!));
+  for (const ref of changed) await recomputeThread(db, ref.mailboxId, ref.conversationId);
+  return { threadsRecomputed: changed.length };
 }

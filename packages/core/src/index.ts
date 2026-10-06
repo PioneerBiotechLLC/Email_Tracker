@@ -15,7 +15,7 @@ export { cleanBody, htmlToText, stripQuotedHistory, stripSignature, tidyWhitespa
 export { syncMailbox, syncMailboxLocked, acquireSyncLock, releaseSyncLock, importSentFolders, type SyncOptions, type SyncStats } from "./sync/sync-mailbox.js";
 export { looksLikeSentFolder } from "./mail/folders.js";
 export { recomputeThread, recomputeMailboxThreads, recomputeSiblingThreads, businessHoursFor, slaHoursFor, ownerAddresses, type RecomputeResult } from "./sync/threads.js";
-export { orgDomains, domainOf, internalRecipients, copyRank, pickPrimary, assignPrimaries, dedupeMessageIds, dedupeOrgMessages, threadRefKey, type MessageCopy, type ThreadRef, type DedupeOrgResult } from "./sync/dedupe.js";
+export { orgDomains, domainOf, internalRecipients, copyRank, pickPrimary, assignPrimaries, dedupeMessageIds, dedupeOrgMessages, relinkRecentCopies, threadRefKey, type MessageCopy, type ThreadRef, type DedupeOrgResult } from "./sync/dedupe.js";
 export { RULE_TYPES, EXCLUSION_ACTIONS, normalizeRuleValue, ruleValueError, exclusionReason, listVisibility, COUNTED } from "./sync/exclusions.js";
 export { reapplyExclusions, countRuleMatches, seedDefaultRules, DEFAULT_EXCLUSION_RULES, type ReapplyResult } from "./sync/exclusion-rules.js";
 export { orgSettings, trackingStart } from "./org-settings.js";

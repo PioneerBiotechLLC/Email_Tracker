@@ -3,7 +3,7 @@
  * (no Graph credentials needed). Run against any Postgres:
  *   DATABASE_URL=... AZURE_TENANT_ID=t AZURE_CLIENT_ID=c AZURE_CLIENT_SECRET=s pnpm exec tsx scripts/fake-sync.ts
  */
-import { getDb, disconnectDb, syncMailbox, importSentFolders, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, summarizePeriod, latestPeriodSummary, mailboxScope, seedDefaultRules, reapplyExclusions, countRuleMatches, collectPeriodActivity, SUMMARY_TOOL_NAME, PERIOD_SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
+import { getDb, disconnectDb, syncMailbox, importSentFolders, relinkRecentCopies, readBody, recomputeThread, summarizeThread, summarizeThreads, planBackfill, summarizePeriod, latestPeriodSummary, mailboxScope, seedDefaultRules, reapplyExclusions, countRuleMatches, collectPeriodActivity, SUMMARY_TOOL_NAME, PERIOD_SUMMARY_TOOL_NAME, type SummaryClient } from "../src/index.js";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { MailProvider, MailboxFolder, RawMessage, ListChangesOptions, DeltaPage, ListChangesResult, SubscriptionInfo, MailUser } from "../src/mail/provider.js";
 
@@ -229,6 +229,13 @@ try {
   const allScope = mailboxScope({ orgId: org.id });
   assert((await db.message.count({ where: { ...allScope, direction: "inbound" } })) === 3 && (await db.message.count({ where: { mailboxId: mb2.id, direction: "inbound" } })) === 2, "all-mailboxes counts once; the single mailbox still sees its copies");
   assert((await db.thread.count({ where: { ...allScope, conversationId: "conv-1" } })) === 1, "all-mailboxes lists the conversation once");
+  // Race: both mailboxes synced the same email at the same moment and neither saw the other's copy yet.
+  await db.message.updateMany({ where: { mailboxId: mb2.id }, data: { duplicateOfId: null } });
+  await recomputeThread(db, mb2.id, "conv-1");
+  assert((await db.thread.count({ where: { ...allScope, conversationId: "conv-1" } })) === 2, "race reproduced: the unlinked copy shows twice in all-mailboxes");
+  const swept = await relinkRecentCopies(db, org.id, d("2026-08-01T00:00:00Z"));
+  assert(swept.threadsRecomputed > 0 && (await db.thread.count({ where: { ...allScope, conversationId: "conv-1" } })) === 1 && (await db.thread.findUniqueOrThrow({ where: { id: tReg.id } })).duplicateOfId === t1.id, "the copy sweep after a sync links them again and the thread shows once");
+  assert((await relinkRecentCopies(db, org.id, d("2026-08-01T00:00:00Z"))).threadsRecomputed === 0, "the sweep changes nothing when the copies are already linked");
   const callsBefore = aiCalls;
   const copied = await summarizeThread(tReg.id, { client: fakeAi(summaryInput), force: true });
   const tRegAi = await db.thread.findUniqueOrThrow({ where: { id: tReg.id } });

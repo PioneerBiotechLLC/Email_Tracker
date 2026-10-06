@@ -1,5 +1,8 @@
 import "server-only";
-import { createLogger, getDb, getEnv, syncMailboxLocked } from "@email-tracker/core";
+import { createLogger, getDb, getEnv, relinkRecentCopies, syncMailboxLocked } from "@email-tracker/core";
+
+/** How far back the copy sweep looks: copies arrive within seconds, three days covers retries and outages. */
+const RELINK_DAYS = 3;
 
 const log = createLogger("webhook");
 
@@ -13,7 +16,10 @@ export async function processMailbox(mailboxId: string, opts: { deadlineAt?: Dat
       log.info("sync already running; skipped", { mailboxId, reason: opts.reason });
       return;
     }
-    log.info("processed", { mailboxId, reason: opts.reason, inbox: stats.folders.inbox.upserted, sent: stats.folders.sentitems.upserted, threads: stats.threadsRecomputed, partial: stats.partial, ms: Date.now() - started });
+    // Copies of one email synced in parallel from several mailboxes may have missed each other: link them now.
+    const mailbox = await db.mailbox.findUniqueOrThrow({ where: { id: mailboxId }, select: { orgId: true } });
+    const relinked = await relinkRecentCopies(db, mailbox.orgId, new Date(Date.now() - RELINK_DAYS * 86_400_000));
+    log.info("processed", { relinked: relinked.threadsRecomputed, mailboxId, reason: opts.reason, inbox: stats.folders.inbox.upserted, sent: stats.folders.sentitems.upserted, threads: stats.threadsRecomputed, partial: stats.partial, ms: Date.now() - started });
   } catch (err) {
     log.error("processing failed", { mailboxId, reason: opts.reason, error: err instanceof Error ? err.message.slice(0, 300) : String(err) });
   } finally {
