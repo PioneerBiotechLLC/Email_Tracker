@@ -124,7 +124,6 @@ async function siblingOutbound(db: PrismaClient, orgId: string, mailboxId: strin
 
 interface PrimaryInfo {
   id: string;
-  threadId: string;
   direction: "inbound" | "outbound";
 }
 
@@ -132,17 +131,65 @@ interface PrimaryInfo {
 async function loadPrimaries(db: PrismaClient, messages: Pick<DbMessage, "duplicateOfId">[]): Promise<Map<string, PrimaryInfo>> {
   const ids = messages.map((m) => m.duplicateOfId).filter((id): id is string => !!id);
   if (!ids.length) return new Map();
-  const rows = await db.message.findMany({ where: { id: { in: ids } }, select: { id: true, threadId: true, direction: true } });
+  const rows = await db.message.findMany({ where: { id: { in: ids } }, select: { id: true, direction: true } });
   return new Map(rows.map((r) => [r.id, r]));
 }
 
-/** The single thread whose messages every message of this thread is a copy of, or null. */
-function duplicateThreadOf(threadId: string, messages: Pick<DbMessage, "duplicateOfId">[], primaries: Map<string, PrimaryInfo>): string | null {
-  if (!messages.length || !messages.every((m) => m.duplicateOfId)) return null;
-  const threadIds = new Set(messages.map((m) => primaries.get(m.duplicateOfId!)?.threadId ?? "?"));
-  if (threadIds.size !== 1) return null;
-  const [target] = threadIds;
-  return target && target !== "?" && target !== threadId ? target : null;
+export interface CopyMessage {
+  id: string;
+  internetMessageId: string | null;
+  direction: "inbound" | "outbound";
+  duplicateOfId: string | null;
+}
+
+/**
+ * Whether every email of a thread is also in another mailbox's thread: same Message-ID, and the same direction
+ * or linked as copies of each other (a colleague's email sent *To* this mailbox is a request here, not a copy).
+ */
+export function containedIn(self: CopyMessage[], other: CopyMessage[]): boolean {
+  if (!self.length) return false;
+  const byId = new Map<string, CopyMessage[]>();
+  for (const o of other) if (o.internetMessageId) (byId.get(o.internetMessageId) ?? byId.set(o.internetMessageId, []).get(o.internetMessageId)!).push(o);
+  return self.every((m) => !!m.internetMessageId && (byId.get(m.internetMessageId) ?? []).some((o) => o.direction === m.direction || m.duplicateOfId === o.id || o.duplicateOfId === m.id));
+}
+
+export interface ThreadRank {
+  threadId: string;
+  messageCount: number;
+  mailboxCreatedAt: Date;
+}
+
+/** The thread that represents a conversation held by several mailboxes: the largest, then the mailbox registered first. */
+const ranksAbove = (a: ThreadRank, b: ThreadRank) =>
+  a.messageCount !== b.messageCount ? a.messageCount > b.messageCount : a.mailboxCreatedAt.getTime() !== b.mailboxCreatedAt.getTime() ? a.mailboxCreatedAt < b.mailboxCreatedAt : a.threadId < b.threadId;
+
+/** Of the threads that contain every email of `self`, the one `self` is a copy of (null when `self` represents the conversation). */
+export function pickContainingThread(self: ThreadRank, containing: ThreadRank[]): string | null {
+  const best = containing.reduce<ThreadRank | null>((acc, t) => (!acc || ranksAbove(t, acc) ? t : acc), null);
+  return best && ranksAbove(best, self) ? best.threadId : null;
+}
+
+/**
+ * The thread in another mailbox of the company that already holds every email of this one (everyone was in
+ * To/Cc of the whole conversation), so "All mailboxes" lists the conversation once. Each mailbox gets its own
+ * Graph conversation id, so threads are matched by their emails' Message-IDs.
+ */
+async function containingThread(db: PrismaClient, thread: { id: string; mailboxId: string; orgId: string; mailboxCreatedAt: Date }, messages: CopyMessage[]): Promise<string | null> {
+  const ids = [...new Set(messages.map((m) => m.internetMessageId))];
+  if (!messages.length || ids.some((id) => !id)) return null;
+  const rows = await db.message.findMany({
+    where: { internetMessageId: { in: ids as string[] }, mailbox: { orgId: thread.orgId }, mailboxId: { not: thread.mailboxId } },
+    select: { id: true, threadId: true, internetMessageId: true, direction: true, duplicateOfId: true },
+  });
+  const byThread = new Map<string, CopyMessage[]>();
+  for (const r of rows) (byThread.get(r.threadId) ?? byThread.set(r.threadId, []).get(r.threadId)!).push(r);
+  const containing = [...byThread].filter(([, msgs]) => containedIn(messages, msgs)).map(([id]) => id);
+  if (!containing.length) return null;
+  const candidates = await db.thread.findMany({ where: { id: { in: containing } }, select: { id: true, messageCount: true, mailbox: { select: { createdAt: true } } } });
+  return pickContainingThread(
+    { threadId: thread.id, messageCount: messages.length, mailboxCreatedAt: thread.mailboxCreatedAt },
+    candidates.map((c) => ({ threadId: c.id, messageCount: c.messageCount, mailboxCreatedAt: c.mailbox.createdAt })),
+  );
 }
 
 /**
@@ -211,7 +258,7 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
   });
   const siblings = await siblingOutbound(db, thread.mailbox.orgId, mailboxId, conversationId, messages.map((m) => m.internetMessageId).filter((id): id is string => !!id));
   const replies = detectReplies(inputs, { owners, businessHours, extraOutbound: siblings.map(toReplyInput) });
-  const duplicateOfId = duplicateThreadOf(thread.id, messages, primaries);
+  const duplicateOfId = await containingThread(db, { id: thread.id, mailboxId, orgId: thread.mailbox.orgId, mailboxCreatedAt: thread.mailbox.createdAt }, messages);
   const realInbound = messages.filter((m, i) => inputs[i]!.direction === "inbound" && !m.isAutoReply);
   const exclusionAction = threadExclusion(realInbound.map((m) => m.exclusionAction));
   // A thread between colleagues only is "internal", not a notification.
