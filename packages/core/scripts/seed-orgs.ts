@@ -1,7 +1,6 @@
 /**
  * Idempotent company records for the known companies (no mailboxes, no users).
- *   pnpm org:seed                 both
- *   pnpm org:seed-pioneer         Pioneer Biotech only
+ *   pnpm org:seed                 every known company
  *   pnpm org:seed-api-pharma      API Pharma only
  * Tenant IDs are recorded by "Connect Microsoft 365" (admin consent) in the dashboard,
  * or pass --tenant <id> to set one here.
@@ -14,11 +13,6 @@ interface CompanySeed {
 }
 
 const COMPANIES: Record<string, CompanySeed> = {
-  pioneer: {
-    slug: "pioneer-biotech", name: "Pioneer Biotech", domain: "pbio.tech", domains: [], timezone: "Asia/Dubai", workDays: [0, 1, 2, 3, 4], workStart: "09:00", workEnd: "18:00",
-    replySlaHours: 24, summaryLanguage: "en", primaryColor: "#C2922F", secondaryColor: "#0B1F3A", headingFont: "merriweather", bodyFont: "source-sans",
-    aiContext: "Life sciences distribution: pharma & biopharma, medical devices, scientific/analytical instruments, bioprocessing equipment, lab equipment, APIs and raw materials. Offices in Masdar City (Abu Dhabi) and New Cairo (Egypt).",
-  },
   "api-pharma": {
     slug: "api-pharma", name: "API Pharma", domain: "api-pharma.net", domains: [], timezone: "Asia/Dubai", workDays: [0, 1, 2, 3, 4], workStart: "09:00", workEnd: "18:00",
     replySlaHours: 24, summaryLanguage: "en", primaryColor: "#BE272C", secondaryColor: "#BE6B27", headingFont: "merriweather", bodyFont: "source-sans",

@@ -62,7 +62,7 @@ Follow top to bottom. Nothing here needs code changes. Commands run on your lapt
 **Login app** (dashboard sign-in). Either reuse the same registration or create `Email Tracker Dashboard`:
 
 1. Authentication → Web → redirect URIs: `https://<your-domain>/api/auth/callback/microsoft-entra-id` (and `http://localhost:3000/api/auth/callback/microsoft-entra-id` for local use).
-2. Supported account types: **multi-tenant** (so users from Pioneer Biotech's tenant can sign in).
+2. Supported account types: **multi-tenant** (so users from every company's own tenant can sign in).
 3. Delegated permissions: `openid`, `profile`, `email`, `User.Read`. Create a client secret → `AUTH_MICROSOFT_ENTRA_ID_*`.
 
 ## d. Database schema and your owner account
@@ -74,12 +74,12 @@ pnpm install
 pnpm db:generate
 pnpm db:deploy                                   # applies all migrations via DIRECT_URL
 pnpm user add <your email> --owner               # owners see and manage every company
-pnpm org:seed                                    # creates API Pharma and Pioneer Biotech company records
+pnpm org:seed                                    # creates the known company records (API Pharma)
 ```
 
 Migrations are never run by the Vercel build. Run `pnpm db:deploy` yourself after pulling a change that adds a migration.
 
-## e. For EACH company (API Pharma, Pioneer Biotech)
+## e. For EACH company
 
 1. Open `https://<your-domain>/companies` (owner only). Check the company's domain, timezone, branding and AI context; edit if needed.
 2. Click **Connect Microsoft 365**. Sign in as a **Global Administrator of that company's tenant** and accept. You are redirected back and the tenant id is recorded ("Microsoft 365 connected").

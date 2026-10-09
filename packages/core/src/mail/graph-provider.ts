@@ -372,4 +372,8 @@ export class GraphProvider implements MailProvider {
     )) as { id: string; expirationDateTime: string };
     return { id: res.id, expiresAt: new Date(res.expirationDateTime) };
   }
+  /** Deletes a Graph subscription (best effort, when a mailbox or a company is removed). */
+  async unsubscribe(subscriptionId: string): Promise<void> {
+    await withGraphRetry("unsubscribe", () => this.client.api(`/subscriptions/${encodeURIComponent(subscriptionId)}`).delete());
+  }
 }

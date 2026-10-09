@@ -18,6 +18,7 @@
     "seed-demo": "tsx scripts/seed-demo.ts",
     "dev-db": "tsx scripts/dev-db.ts",
     "seed-orgs": "tsx scripts/seed-orgs.ts",
+    "remove-org": "tsx scripts/remove-org.ts",
     "check:migration": "tsx scripts/check-migration.ts"
   },
   "dependencies": {

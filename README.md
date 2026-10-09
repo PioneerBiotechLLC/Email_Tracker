@@ -214,7 +214,7 @@ Then open http://localhost:3000 (or `PORT=3001 pnpm dev` if 3000 is busy).
 
 **From another PC on the office network:** run `pnpm dev:lan` instead of `pnpm dev` (it binds to all interfaces), put your machine's IP or `.local` name in `DEV_ALLOWED_ORIGINS` in `.env` (find the IP with `ipconfig getifaddr en0` on macOS), allow the connection if macOS asks about the firewall, and open `http://<your-ip>:3000` on the other PC. The demo bypass works there too. Real Microsoft sign-in over a plain-http LAN address is not possible (Entra only allows http redirect URIs for localhost); that arrives with the hosted deployment in Phase 7. `pnpm db:seed-demo` creates "Demo Pharma (DEMO DATA)" with 40 realistic threads (English + Arabic) in every status; `pnpm db:seed-demo --remove` deletes the demo org and everything under it. The demo org is flagged `isDemo` and shows a banner. Its users (`demo-admin@demo-pharma.example`, admin; `demo-viewer@demo-pharma.example`, viewer) are not real Microsoft accounts, which is why the `NODE_ENV=test` bypass is used above; that bypass is compiled out of production builds (see `apps/web/src/lib/e2e.ts`).
 
-**What to expect:** Overview shows six KPI tiles (received, replied %, median and average business-hours response with wall-clock in the tooltip, awaiting, overdue), a received-vs-replied bar chart, a median-response-time line, awaiting-by-category bars, a slowest-senders table and the ten most overdue threads. Inbox Tracker highlights overdue rows in red and shows the reply method in small text under the response time. Thread detail shows inbound messages on the left, ours on the right, auto-replies greyed out, and the AI panel plus admin actions (Mark closed / Reopen, No reply needed / Needs reply, Re-summarize, manual category/priority). Settings has mailboxes (pause/resume, last sync, sync errors), business hours, SLA and summary language, branding (logo + primary color), digest recipients/time, AI usage this month and users.
+**What to expect:** Overview shows a key-figures strip (received, replied %, average business-hours response with wall-clock in the tooltip, awaiting and overdue — the last two open the matching thread lists), an Ask box (when `CHAT_ENABLED` is on) that answers questions inline with sources and continues on the Ask page, the ten most overdue threads, awaiting-by-category bars, a received-vs-replied bar chart and a median-response-time line. Inbox Tracker highlights overdue rows in red and shows the reply method in small text under the response time. Thread detail shows inbound messages on the left, ours on the right, auto-replies greyed out, and the AI panel plus admin actions (Mark closed / Reopen, No reply needed / Needs reply, Re-summarize, manual category/priority). Settings has mailboxes (pause/resume, last sync, sync errors), business hours, SLA and summary language, branding (logo + primary color), digest recipients/time, AI usage this month and users.
 
 ### Notes
 
@@ -242,11 +242,11 @@ pnpm --filter @email-tracker/web test:e2e   # Playwright smoke tests (seeds the 
 - **Health**: `/api/health` reports DB reachability, a Graph token check per company and sync freshness, without secrets.
 
 ```bash
-pnpm org:seed                      # API Pharma + Pioneer Biotech company records (idempotent)
-pnpm org:seed-pioneer              # Pioneer Biotech only
+pnpm org:seed                      # known company records (API Pharma; idempotent)
+pnpm org:remove <slug|domain> --yes  # delete a company and everything stored under it (dry run without --yes)
 pnpm user add me@x.com --owner     # global owner
-pnpm user add a@pbio.tech --org pbio.tech --role admin
-pnpm mailbox add sales@pbio.tech --tenant <tenant-id>
+pnpm user add a@api-pharma.net --org api-pharma.net --role admin
+pnpm mailbox add sales@api-pharma.net --tenant <tenant-id>
 pnpm --filter @email-tracker/core check:migration   # replays the AppUser → Membership migration in a scratch schema
 ```
 
@@ -445,7 +445,8 @@ TEST_DATABASE_URL="postgres://…@localhost:…/…" pnpm test
 | `pnpm ai:period <email\|all> [--period day\|week\|month] [--org <domain>]` | very short digest of everything sent and received, stored for the Summary page |
 | `pnpm ai:usage [--days 30]` | Claude calls, tokens and cost |
 | `pnpm user add <email> [--org <domain> --role admin\|viewer] [--owner]` / `user list` / `user remove <email> [--org <domain>]` | dashboard users and memberships |
-| `pnpm org:seed` / `org:seed-pioneer` / `org:seed-api-pharma` | known company records |
+| `pnpm org:seed` / `org:seed-api-pharma` | known company records |
+| `pnpm org:remove <slug\|domain> [--yes]` | delete a company and everything stored under it (dry run without `--yes`) |
 | `pnpm dev` / `pnpm build` / `pnpm start` | web dashboard |
 | `pnpm db:seed-demo [--remove]` | demo organization with 40 fake threads |
 | `pnpm --filter @email-tracker/web test:e2e` | Playwright smoke tests |

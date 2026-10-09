@@ -8,7 +8,11 @@ test("overview loads with KPI tiles and charts", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await expect(page.getByText("Received", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Overdue", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Average response", { exact: true })).toBeVisible();
   await expect(page.getByText("Needs attention")).toBeVisible();
+  await expect(page.getByTestId("ask-box")).toBeVisible(); // the Ask chat, inline (CHAT_ENABLED is on in the test server)
+  await expect(page.getByText("Median response")).toHaveCount(0);
+  await expect(page.getByText("Slowest-answered senders")).toHaveCount(0);
   await expect(page.getByText("Demo data — this organization")).toBeVisible();
 });
 
@@ -159,6 +163,21 @@ test("Ask: the page loads and an answer renders with numbered sources linking to
   await expect(page.getByText("Limited to the thread:")).toContainText("PO 4512 – Amoxicillin");
 });
 
+test("Ask box on the overview answers inline and links to the chat it started", async ({ page }) => {
+  const turn = { id: "turn2", question: "Who asked about PO 4512?", answerMarkdown: "MedCare asked about **PO 4512** [1].", found: true, unverified: false, limitHit: null, error: null, model: "claude-sonnet-5-5", costUsd: 0.01, emailsRead: 3, helpful: null,
+    citations: [{ marker: "1", messageId: "msgA", threadId: "threadA", subject: "PO 4512 – Amoxicillin 250mg suspension", from: "MedCare Pharmacies", to: "sales@demo-pharma.example", date: "2026-09-30 10:00", mailbox: "sales@demo-pharma.example", webLink: null }] };
+  await page.route("**/ask/stream", (route) => route.fulfill({ contentType: "application/x-ndjson", body: [{ type: "status", text: "Searching emails…" }, { type: "answer", sessionId: "sessionB", turn }].map((e) => JSON.stringify(e)).join("\n") + "\n" }));
+  await page.goto(C);
+  const box = page.getByTestId("ask-box");
+  await expect(box.getByTestId("ask-box-open")).toHaveAttribute("href", `${C}/ask`);
+  await box.getByLabel("Your question").fill("Who asked about PO 4512?");
+  await box.getByLabel("Your question").press("Enter");
+  const answer = box.getByTestId("ask-turn");
+  await expect(answer).toContainText("MedCare asked about PO 4512");
+  await expect(answer.getByTestId("ask-source").first().getByRole("link", { name: "Open thread" })).toHaveAttribute("href", `${C}/threads/threadA#msg-msgA`);
+  await expect(box.getByTestId("ask-box-open")).toHaveAttribute("href", `${C}/ask?s=sessionB`); // follow-ups continue this chat
+});
+
 test("Ask is off without CHAT_ENABLED: no menu entry, and the page and its stream return 404", async ({ page, context, baseURL }) => {
   await context.addCookies([{ name: "e2e-chat", value: "off", url: baseURL! }]); // test-only switch, see lib/chat-flag.ts
   const res = await page.goto(`${C}/ask`);
@@ -168,20 +187,21 @@ test("Ask is off without CHAT_ENABLED: no menu entry, and the page and its strea
   await page.goto(C);
   await expect(page.getByRole("link", { name: "Overview" }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "Ask", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("ask-box")).toHaveCount(0);
 });
 
 test("company switcher lists the user's companies and Companies is owner-only", async ({ page }) => {
   await page.goto(C);
   await page.getByRole("button", { name: "Switch company" }).click();
   await expect(page.getByRole("menuitem", { name: /Demo Pharma/ })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: /Pioneer Biotech/ })).toHaveCount(0); // demo admin is not a member
+  await expect(page.getByRole("menuitem", { name: /API Pharma/ })).toHaveCount(0); // demo admin is not a member
   await page.keyboard.press("Escape");
   const res = await page.goto("/companies");
   expect(res?.status()).toBe(404); // not an owner
 });
 
 test("a company the user does not belong to is a 404, as is an unknown slug", async ({ page }) => {
-  const other = await page.goto("/c/pioneer-biotech");
+  const other = await page.goto("/c/api-pharma");
   expect(other?.status()).toBe(404);
   const unknown = await page.goto("/c/does-not-exist/tracker");
   expect(unknown?.status()).toBe(404);

@@ -1,17 +1,12 @@
 import { notFound } from "next/navigation";
-import { getDb, getEnv, localParts, MAX_TURNS_PER_SESSION, priceFor } from "@email-tracker/core";
+import { getDb, getEnv, MAX_TURNS_PER_SESSION, priceFor } from "@email-tracker/core";
 import { AskChat } from "@/components/ask/ask-chat";
 import { chatEnabled } from "@/lib/chat-flag";
-import { getAskSession, getAskSessions } from "@/lib/data/ask";
+import { defaultAskRange, getAskSession, getAskSessions } from "@/lib/data/ask";
 import { formatDateTime } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
 
 export const metadata = { title: "Ask" };
-
-/** Default From date of the Ask filters; the default "to" date is today in the company's timezone. */
-const DEFAULT_ASK_FROM = "2026-01-01";
-
-const pad = (n: number) => String(n).padStart(2, "0");
 
 export default async function AskPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ s?: string; thread?: string; q?: string }> }) {
   if (!(await chatEnabled())) notFound();
@@ -28,9 +23,8 @@ export default async function AskPage({ params, searchParams }: { params: Promis
   const env = getEnv();
   const chat = priceFor(env.ANTHROPIC_CHAT_MODEL);
   const deep = priceFor(env.ANTHROPIC_CHAT_DEEP_MODEL);
-  const today = localParts(now, org.timezone);
   // Asking about one thread searches that whole thread, whatever its dates.
-  const defaultRange = thread ? { after: "", before: "" } : { after: DEFAULT_ASK_FROM, before: `${today.year}-${pad(today.month)}-${pad(today.day)}` };
+  const defaultRange = thread ? { after: "", before: "" } : defaultAskRange(now, org.timezone);
 
   return (
     <div className="space-y-4">

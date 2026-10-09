@@ -8,12 +8,12 @@ import type { ActionResult } from "./settings";
 /** Time budget for re-checking stored copies after a mailbox is added (the Graph calls before it take a few seconds of the request). */
 const REAPPLY_SECONDS = 30;
 
-const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #C2922F");
+const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #BE272C");
 const hhmm = z.string().regex(/^\d{2}:\d{2}$/, "Use HH:MM");
 const companySchema = z.object({
   name: z.string().min(2).max(120),
   slug: z.string().transform((s) => s.trim().toLowerCase()).refine(isValidSlug, "Slug: lowercase letters, digits and dashes"),
-  domain: z.string().transform((s) => s.trim().toLowerCase()).refine((d) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d), "Primary email domain, e.g. pbio.tech"),
+  domain: z.string().transform((s) => s.trim().toLowerCase()).refine((d) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d), "Primary email domain, e.g. example.com"),
   domains: z.array(z.string()).max(10),
   azureTenantId: z.union([z.literal(""), z.string().regex(/^[0-9a-f-]{36}$/i, "Tenant ID must be a GUID")]).transform((v) => v || null),
   timezone: z.string().min(1).max(64).refine((tz) => { try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); return true; } catch { return false; } }, "Unknown timezone"),

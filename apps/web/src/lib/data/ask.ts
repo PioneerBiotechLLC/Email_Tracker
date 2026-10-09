@@ -1,5 +1,14 @@
 import "server-only";
-import { getDb, type SessionContext, type SourceCitation } from "@email-tracker/core";
+import { getDb, localParts, type SessionContext, type SourceCitation } from "@email-tracker/core";
+
+/** Default From date of the Ask filters; the default "to" date is today in the company's timezone. */
+export const DEFAULT_ASK_FROM = "2026-01-01";
+
+/** The dates a new question searches unless the user changes them (YYYY-MM-DD). */
+export function defaultAskRange(now: Date, tz: string): { after: string; before: string } {
+  const t = localParts(now, tz);
+  return { after: DEFAULT_ASK_FROM, before: `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}` };
+}
 
 /** A stored question and answer, in the shape the chat renders (also what the stream route sends for a new answer). */
 export interface AskTurn {

@@ -5,9 +5,10 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { Check, Copy, ExternalLink, History, Plus, Send, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { setTurnFeedback } from "@/actions/ask";
 import { Button } from "@/components/ui/button";
-import type { AskStreamEvent, AskTurn } from "@/lib/data/ask";
+import type { AskTurn } from "@/lib/data/ask";
 import { cn } from "@/lib/utils";
 import { AnswerText } from "./answer-text";
+import { streamAsk } from "./ask-stream";
 
 export interface AskChatProps {
   slug: string;
@@ -27,7 +28,7 @@ export interface AskChatProps {
 const field = "h-9 rounded-md border bg-background px-2 text-sm";
 const usd = (n: number) => `$${n < 0.1 ? n.toFixed(3) : n.toFixed(2)}`;
 
-function Turn({ turn, slug, orgId }: { turn: AskTurn; slug: string; orgId: string }) {
+export function Turn({ turn, slug, orgId }: { turn: AskTurn; slug: string; orgId: string }) {
   const [helpful, setHelpful] = useState(turn.helpful);
   const [copied, setCopied] = useState(false);
   const [, start] = useTransition();
@@ -99,29 +100,17 @@ export function AskChat({ slug, orgId, sessions, session, mailboxes, thread, ini
     setPending({ question: q, status: "Thinking…" });
     setQuestion("");
     try {
-      const res = await fetch(`${base}/stream`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q, sessionId, deep: filters.deep, mailboxId: filters.mailboxId || null, after: filters.after || null, before: filters.before || null, threadId: thread?.id ?? null }) });
-      if (!res.ok || !res.body) throw new Error(`The server answered ${res.status}.`);
-      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        buffer += value ?? "";
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines.filter(Boolean)) {
-          const e = JSON.parse(line) as AskStreamEvent;
-          if (e.type === "status") setPending({ question: q, status: e.text });
-          else if (e.type === "error") { setError(e.message); setQuestion(q); }
-          else {
-            setTurns((t) => [...t, e.turn]);
-            if (e.sessionId !== sessionId) {
-              setSessionId(e.sessionId);
-              // Keep the URL on this chat so a reload (and the history list) shows it.
-              router.replace(`${base}?s=${e.sessionId}${thread ? `&thread=${thread.id}` : ""}`, { scroll: false });
-            }
-          }
-        }
-        if (done) break;
+      const r = await streamAsk(base, { question: q, sessionId, deep: filters.deep, mailboxId: filters.mailboxId || null, after: filters.after || null, before: filters.before || null, threadId: thread?.id ?? null }, (status) => setPending({ question: q, status }));
+      if (!r.ok) {
+        setError(r.message);
+        setQuestion(q);
+        return;
+      }
+      setTurns((t) => [...t, r.turn]);
+      if (r.sessionId !== sessionId) {
+        setSessionId(r.sessionId);
+        // Keep the URL on this chat so a reload (and the history list) shows it.
+        router.replace(`${base}?s=${r.sessionId}${thread ? `&thread=${thread.id}` : ""}`, { scroll: false });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "The question could not be sent.");

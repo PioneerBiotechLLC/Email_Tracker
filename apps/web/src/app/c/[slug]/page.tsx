@@ -1,31 +1,44 @@
 import Link from "next/link";
-import { trackingStart } from "@email-tracker/core";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ArrowRight, Sparkles } from "lucide-react";
+import { MAX_TURNS_PER_SESSION, trackingStart } from "@email-tracker/core";
+import { AskBox } from "@/components/ask/ask-box";
 import { AwaitingByCategoryChart, ReceivedVsRepliedChart, ResponseTimeChart } from "@/components/charts/overview-charts";
+import { PriorityChip } from "@/components/shared/badges";
 import { EmptyState } from "@/components/shared/empty-state";
-import { PriorityChip, StatusBadge } from "@/components/shared/badges";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { chatEnabled } from "@/lib/chat-flag";
+import { defaultAskRange } from "@/lib/data/ask";
 import { getOverview } from "@/lib/data/overview";
 import { clampToTracking, parseFilters, withParams, type SearchParams } from "@/lib/filters";
 import { CATEGORY_LABEL, formatDateTime, formatMinutes, formatPct, formatSince } from "@/lib/format";
 import { getCompanyContext } from "@/lib/session";
+import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Overview" };
 
-function Tile({ label, value, sub, tooltip }: { label: string; value: string; sub?: string; tooltip?: string }) {
+/** One figure of the key-figures strip. With `href` the whole tile opens the matching list. */
+function Stat({ label, value, sub, href, tone, tooltip, className }: { label: string; value: string; sub?: string; href?: string; tone?: "bad"; tooltip?: string; className?: string }) {
   const body = (
-    <Card className="gap-1 py-4">
-      <CardHeader className="px-4"><CardTitle className="font-sans text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</CardTitle></CardHeader>
-      <CardContent className="px-4"><div className="font-heading text-2xl font-bold tracking-tight tabular-nums">{value}</div>{sub && <div className="text-xs text-muted-foreground">{sub}</div>}</CardContent>
-    </Card>
+    <div className={cn("min-w-0 px-4 py-4 md:px-5", href && "press h-full transition-colors hover:bg-accent/50")}>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={cn("mt-1 font-sans text-2xl font-semibold tracking-tight md:text-[1.75rem]", tone === "bad" && "text-status-bad")}>{value}</p>
+      {sub && <p className="mt-0.5 truncate text-xs text-muted-foreground">{sub}</p>}
+    </div>
   );
-  return tooltip ? <Tooltip><TooltipTrigger asChild><div tabIndex={0}>{body}</div></TooltipTrigger><TooltipContent>{tooltip}</TooltipContent></Tooltip> : body;
+  const tile = href ? <Link href={href} className="block h-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset">{body}</Link> : body;
+  return (
+    <div className={cn("bg-card", className)}>
+      {tooltip ? <Tooltip><TooltipTrigger asChild><div tabIndex={0} className="h-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset">{tile}</div></TooltipTrigger><TooltipContent>{tooltip}</TooltipContent></Tooltip> : tile}
+    </div>
+  );
 }
 
 export default async function OverviewPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<SearchParams> }) {
   const { slug } = await params;
   const sp = await searchParams;
-  const { ctx, org } = await getCompanyContext(slug);
+  const [{ ctx, org, mailboxes }, chat] = await Promise.all([getCompanyContext(slug), chatEnabled()]);
   const base = `/c/${slug}`;
   const trackFrom = trackingStart(org);
   const f = clampToTracking(parseFilters(sp, org.timezone), trackFrom, org.timezone);
@@ -34,70 +47,86 @@ export default async function OverviewPage({ params, searchParams }: { params: P
   const k = o.kpis;
   const chartData = o.days.map((d) => ({ ...d }));
   const byCategory = o.byCategory.map((c) => ({ category: CATEGORY_LABEL[c.category] ?? c.category, count: c.count }));
+  const threadsHref = (status: string) => `${base}/threads` + withParams(sp, { status, page: null });
+  const mailbox = f.mailboxId ? mailboxes.find((m) => m.id === f.mailboxId) : null;
+  const askRange = defaultAskRange(now, org.timezone);
+  const empty = k.received === 0 && o.awaiting === 0;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-2xl font-bold">Overview</h1>
-        <p className="text-sm text-muted-foreground">
-          {f.fromDay} → {f.toDay}{trackFrom && f.from.getTime() === trackFrom.getTime() ? " (reply tracking starts here)" : ""}{sp.denied ? " · Settings are admin-only" : ""} · <Link href={`${base}/summary` + withParams(sp, { range: null, from: null, to: null, page: null, denied: null })} className="underline">Daily / weekly summary</Link>
-        </p>
-      </div>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Overview</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {f.fromDay} → {f.toDay}{trackFrom && f.from.getTime() === trackFrom.getTime() ? " · reply tracking starts here" : ""}{mailbox ? ` · ${mailbox.emailAddress}` : ""}{sp.denied ? " · Settings are admin-only" : ""}
+          </p>
+        </div>
+        <Button asChild variant="outline" size="sm"><Link href={`${base}/summary` + withParams(sp, { range: null, from: null, to: null, page: null, denied: null })}><Sparkles className="size-4" /> Daily / weekly summary</Link></Button>
+      </header>
 
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6" aria-label="Key figures">
-        <Tile label="Received" value={k.received.toLocaleString("en-US")} sub="inbound emails in range" />
-        <Tile label="Replied" value={formatPct(k.repliedPct)} sub={`${k.replied} of ${k.received}`} />
-        <Tile label="Median response" value={formatMinutes(k.medianBusinessMinutes)} sub="business hours" tooltip={`Wall-clock median: ${formatMinutes(k.medianRawMinutes)}`} />
-        <Tile label="Average response" value={formatMinutes(k.avgBusinessMinutes)} sub="business hours" tooltip={`Wall-clock average: ${formatMinutes(k.avgRawMinutes)}`} />
-        <Tile label="Awaiting reply" value={o.awaiting.toLocaleString("en-US")} sub="threads, right now" />
-        <Tile label="Overdue" value={o.overdue.toLocaleString("en-US")} sub="past the SLA" />
+      <section aria-label="Key figures" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border shadow-sm md:grid-cols-5">
+        <Stat label="Received" value={k.received.toLocaleString("en-US")} sub="inbound emails in range" />
+        <Stat label="Replied" value={formatPct(k.repliedPct)} sub={`${k.replied.toLocaleString("en-US")} of ${k.received.toLocaleString("en-US")}`} />
+        <Stat label="Average response" value={formatMinutes(k.avgBusinessMinutes)} sub="business hours" tooltip={`Wall-clock average: ${formatMinutes(k.avgRawMinutes)}`} />
+        <Stat label="Awaiting reply" value={o.awaiting.toLocaleString("en-US")} sub="threads, right now" href={threadsHref("awaiting_us")} />
+        <Stat label="Overdue" value={o.overdue.toLocaleString("en-US")} sub={o.overdue ? "past the SLA · open the list" : "past the SLA"} href={threadsHref("overdue")} tone={o.overdue ? "bad" : undefined} className="col-span-2 md:col-span-1" />
       </section>
 
-      {k.received === 0 && o.awaiting === 0 ? (
+      {chat && (
+        <AskBox
+          slug={slug}
+          orgId={org.id}
+          scope={{ mailboxId: mailbox?.id ?? null, mailboxLabel: mailbox ? mailbox.emailAddress : "all mailboxes", after: askRange.after, before: askRange.before }}
+          maxTurns={MAX_TURNS_PER_SESSION}
+        />
+      )}
+
+      {empty ? (
         <EmptyState title="No emails in this range" hint="Change the date range or mailbox, or run pnpm sync:once to pull mail." />
       ) : (
         <>
-          <section className="grid gap-4 lg:grid-cols-2">
-            <Card><CardHeader><CardTitle className="text-base">Received vs replied per day</CardTitle></CardHeader><CardContent><ReceivedVsRepliedChart data={chartData} /></CardContent></Card>
-            <Card><CardHeader><CardTitle className="text-base">Median response time per day (business hours)</CardTitle></CardHeader><CardContent><ResponseTimeChart data={chartData} /></CardContent></Card>
-          </section>
-          <section className="grid gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader><CardTitle className="text-base">Awaiting reply by category</CardTitle></CardHeader>
-              <CardContent>{byCategory.length ? <AwaitingByCategoryChart data={byCategory} /> : <p className="text-sm text-muted-foreground">Nothing is waiting for a reply.</p>}</CardContent>
+          <section className="grid gap-4 lg:grid-cols-3" aria-label="Backlog">
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="text-base">Needs attention</CardTitle>
+                <CardDescription>{o.overdue ? `${o.overdue.toLocaleString("en-US")} ${o.overdue === 1 ? "thread is" : "threads are"} past the reply SLA · oldest first` : "Threads past the reply SLA"}</CardDescription>
+                {o.overdue > 0 && <CardAction><Link href={threadsHref("overdue")} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground hover:underline">All overdue threads <ArrowRight className="size-3.5" aria-hidden /></Link></CardAction>}
+              </CardHeader>
+              <CardContent>
+                {o.attention.length ? (
+                  <ul className="divide-y">
+                    {o.attention.map((t) => (
+                      <li key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                        <Link href={`${base}/threads/${t.id}`} className="min-w-0 flex-1 basis-56 truncate font-medium hover:underline" dir="auto">{t.subject || "(no subject)"}</Link>
+                        <PriorityChip priority={t.priority} />
+                        <span className="text-xs text-muted-foreground"><span className="font-medium text-status-bad" title={`Waiting since ${formatDateTime(t.awaitingSince, org.timezone, now)}`}>waiting {formatSince(t.awaitingSince, now)}</span> · {t.mailbox.emailAddress}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="text-sm text-muted-foreground">Nothing is overdue. 🎉</p>}
+              </CardContent>
             </Card>
             <Card>
-              <CardHeader><CardTitle className="text-base">Slowest-answered senders</CardTitle></CardHeader>
-              <CardContent>
-                {o.slowest.length ? (
-                  <table className="w-full text-sm"><thead className="text-left text-xs text-muted-foreground"><tr><th className="py-1 font-medium">Company / sender</th><th className="py-1 text-right font-medium">Replies</th><th className="py-1 text-right font-medium">Avg (business)</th><th className="py-1 text-right font-medium">Median</th></tr></thead>
-                    <tbody>{o.slowest.map((s) => <tr key={s.key} className="border-t"><td className="py-1.5">{s.key}</td><td className="py-1.5 text-right">{s.replies}</td><td className="py-1.5 text-right">{formatMinutes(s.avgBusinessMinutes)}</td><td className="py-1.5 text-right">{formatMinutes(s.medianBusinessMinutes)}</td></tr>)}</tbody></table>
-                ) : <p className="text-sm text-muted-foreground">Not enough answered emails yet (needs 2+ replies per sender).</p>}
-              </CardContent>
+              <CardHeader>
+                <CardTitle className="text-base">Awaiting reply by category</CardTitle>
+                <CardDescription>{o.awaiting ? `${o.awaiting.toLocaleString("en-US")} ${o.awaiting === 1 ? "thread waits" : "threads wait"} for our reply` : "Threads waiting for our reply"}</CardDescription>
+              </CardHeader>
+              <CardContent>{byCategory.length ? <AwaitingByCategoryChart data={byCategory} /> : <p className="text-sm text-muted-foreground">Nothing is waiting for a reply.</p>}</CardContent>
+            </Card>
+          </section>
+
+          <section className="grid gap-4 lg:grid-cols-2" aria-label="Trends">
+            <Card>
+              <CardHeader><CardTitle className="text-base">Received vs replied per day</CardTitle><CardDescription>Inbound emails and how many of them got a reply</CardDescription></CardHeader>
+              <CardContent><ReceivedVsRepliedChart data={chartData} /></CardContent>
+            </Card>
+            <Card>
+              <CardHeader><CardTitle className="text-base">Response time per day</CardTitle><CardDescription>Median of the day&apos;s answered emails, in business hours</CardDescription></CardHeader>
+              <CardContent><ResponseTimeChart data={chartData} /></CardContent>
             </Card>
           </section>
         </>
       )}
-
-      <section>
-        <Card>
-          <CardHeader className="flex-row items-baseline justify-between"><CardTitle className="text-base">Needs attention</CardTitle><Link href={`${base}/threads` + withParams(sp, { status: "overdue", page: null })} className="text-sm underline">All overdue threads</Link></CardHeader>
-          <CardContent>
-            {o.attention.length ? (
-              <ul className="divide-y">
-                {o.attention.map((t) => (
-                  <li key={t.id} className="flex flex-wrap items-center gap-2 py-2">
-                    <StatusBadge status="overdue" />
-                    <Link href={`${base}/threads/${t.id}`} className="min-w-0 flex-1 truncate font-medium hover:underline" dir="auto">{t.subject || "(no subject)"}</Link>
-                    <PriorityChip priority={t.priority} />
-                    <span className="text-xs text-muted-foreground">waiting {formatSince(t.awaitingSince, now)} · since {formatDateTime(t.awaitingSince, org.timezone, now)} · {t.mailbox.emailAddress}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="text-sm text-muted-foreground">Nothing is overdue. 🎉</p>}
-          </CardContent>
-        </Card>
-      </section>
     </div>
   );
 }

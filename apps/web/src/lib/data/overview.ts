@@ -1,5 +1,5 @@
 import "server-only";
-import { bucketByDay, computeKpis, COUNTED, getDb, mailboxScope, slowestSenders, type Prisma, type SessionContext } from "@email-tracker/core";
+import { bucketByDay, computeKpis, COUNTED, getDb, mailboxScope, type Prisma, type SessionContext } from "@email-tracker/core";
 import type { Filters } from "@/lib/filters";
 
 /** `trackFrom`: the company's reply-tracking start; threads waiting since before it are left out even before every thread was recomputed. */
@@ -26,7 +26,6 @@ export async function getOverview(ctx: SessionContext, f: Filters, tz: string, n
   return {
     kpis: computeKpis(rows),
     days: bucketByDay(rows, f.from, f.to, tz),
-    slowest: slowestSenders(rows, 5, 2),
     awaiting,
     overdue,
     byCategory: byCategoryRaw.map((c) => ({ category: c.category, count: c._count._all })).sort((a, b) => b.count - a.count),

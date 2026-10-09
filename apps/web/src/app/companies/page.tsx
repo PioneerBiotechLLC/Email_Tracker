@@ -18,7 +18,7 @@ function CompanyFields({ org }: { org?: { name: string; slug: string; domain: st
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="block">Name<input name="name" required defaultValue={org?.name} className={field} /></label>
       <label className="block">Slug (URL: /c/…)<input name="slug" defaultValue={org?.slug} placeholder="auto from name" className={field} /></label>
-      <label className="block">Primary email domain<input name="domain" required defaultValue={org?.domain} placeholder="pbio.tech" className={field} /></label>
+      <label className="block">Primary email domain<input name="domain" required defaultValue={org?.domain} placeholder="example.com" className={field} /></label>
       <label className="block">Other domains (comma separated)<input name="domains" defaultValue={org?.domains.join(", ")} className={field} /></label>
       <label className="block">Microsoft 365 tenant ID<input name="azureTenantId" defaultValue={org?.azureTenantId ?? ""} placeholder="filled by Connect Microsoft 365" className={field} /></label>
       <label className="block">Timezone<input name="timezone" defaultValue={org?.timezone ?? "Asia/Dubai"} className={field} /></label>
