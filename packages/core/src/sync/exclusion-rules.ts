@@ -45,6 +45,8 @@ export interface ReapplyResult {
   threadsRecomputed: number;
   /** true when the deadline stopped the pass early */
   partial: boolean;
+  /** threads whose recompute failed; reported, never fatal: a re-run (or the thread's next sync) retries them */
+  failed: { mailboxId: string; conversationId: string; error: string }[];
 }
 
 const CHUNK = 500;
@@ -61,7 +63,7 @@ export async function reapplyExclusions(db: PrismaClient, orgId: string, opts: R
   const owners = new Map((await db.mailbox.findMany({ where: { orgId }, select: { id: true, emailAddress: true, aliases: true } })).map((m) => [m.id, ownerAddresses(m)]));
   const where = { mailbox: { orgId }, direction: "inbound" } satisfies Prisma.MessageWhereInput;
   const total = await db.message.count({ where });
-  const out: ReapplyResult = { scanned: 0, changed: 0, threadsRecomputed: 0, partial: false };
+  const out: ReapplyResult = { scanned: 0, changed: 0, threadsRecomputed: 0, partial: false, failed: [] };
   let cursor: string | undefined;
   for (;;) {
     if (opts.deadlineAt && Date.now() >= opts.deadlineAt.getTime()) {
@@ -93,8 +95,13 @@ export async function reapplyExclusions(db: PrismaClient, orgId: string, opts: R
       out.changed += g.ids.length;
     }
     for (const t of threads.values()) {
-      await recomputeThread(db, t.mailboxId, t.conversationId);
-      out.threadsRecomputed += 1;
+      try {
+        await recomputeThread(db, t.mailboxId, t.conversationId);
+        out.threadsRecomputed += 1;
+      } catch (err) {
+        // One bad thread must not abort the pass over the whole company: its messages are already written, and a re-run retries the recompute.
+        out.failed.push({ ...t, error: err instanceof Error ? err.message.slice(0, 300) : String(err) });
+      }
     }
 
     out.scanned += page.length;
@@ -102,7 +109,7 @@ export async function reapplyExclusions(db: PrismaClient, orgId: string, opts: R
     cursor = page[page.length - 1]!.id;
     if (page.length < CHUNK) break;
   }
-  log.info("rules re-applied", { orgId, ...out });
+  log.info("rules re-applied", { orgId, ...out, failed: out.failed.length });
   return out;
 }
 

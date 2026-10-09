@@ -57,7 +57,9 @@ async function reapply(db: PrismaClient, orgId: string): Promise<ReapplyResult> 
 }
 
 const affected = (r: ReapplyResult) =>
-  `${r.changed} email${r.changed === 1 ? "" : "s"} affected${r.partial ? " so far; the rest is applied by the next sync or `pnpm rules:reapply`" : ""}`;
+  `${r.changed} email${r.changed === 1 ? "" : "s"} affected${r.partial ? " so far; save again to continue, or run `pnpm rules:reapply`" : ""}${
+    r.failed.length ? `; ${r.failed.length} thread${r.failed.length === 1 ? "" : "s"} could not be recomputed (save again, or run \`pnpm replies:recompute all\`)` : ""
+  }`;
 
 /** Live preview while typing a rule: how many emails of the last 90 days it matches. Nothing is saved. */
 export async function previewExclusionRule(orgId: string, formData: FormData): Promise<{ count: number } | { error: string }> {

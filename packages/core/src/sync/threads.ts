@@ -92,7 +92,7 @@ function toReplyInput(m: DbMessage): ReplyInputMessage {
 const utcTimestamp = (d: Date | null) => (d ? d.toISOString().replace("T", " ").replace("Z", "") : null);
 
 /** Writes the reply fields of several messages in one UPDATE … FROM unnest(…). */
-function writeReplyFields(db: PrismaClient, rows: ReplyResult[]): Prisma.PrismaPromise<number> {
+function writeReplyFields(db: PrismaClient | Prisma.TransactionClient, rows: ReplyResult[]): Prisma.PrismaPromise<number> {
   return db.$executeRaw`
     UPDATE "Message" AS m SET
       "repliedAt" = v.replied_at, "repliedByMessageId" = v.replied_by, "replyMethod" = v.method::"ReplyMethod",
@@ -294,14 +294,15 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
   const status = exclusionAction && computed.status !== "closed" ? { ...computed, status: "no_reply_needed" as const, awaitingSince: null, overdueAt: null } : computed;
 
   const changedReplies = replies.filter((r, i) => replyChanged(messages[i]!, r));
-  const updates: Prisma.PrismaPromise<unknown>[] = [];
-  // All changed messages in ONE statement: one UPDATE per email inside the transaction could outlast
-  // Prisma's 5-second transaction limit on a long thread over a slow connection.
-  if (changedReplies.length) updates.push(writeReplyFields(db, changedReplies));
-  updates.push(
-    db.thread.update({
-      where: { id: thread.id },
-      data: {
+  // All changed messages in ONE statement, in a transaction with a generous timeout: Prisma's default 5 seconds
+  // is outlasted on a long thread over a slow connection, or while a sync holds locks on the same rows.
+  await db.$transaction(
+    async (tx) => {
+      if (changedReplies.length) await writeReplyFields(tx, changedReplies);
+      await tx.thread.update({
+        where: { id: thread.id },
+        select: { id: true },
+        data: {
         subject: first.subject,
         normalizedSubject: normalizeSubject(first.subject),
         firstMessageAt: first.receivedAt,
@@ -319,10 +320,11 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
         ...(thread.status === "closed" && status.status !== "closed" ? { closedAt: null, closedBy: null } : {}),
         // A newer inbound message invalidates the previous needsReply decision (user or AI) until the AI re-summarizes.
         ...(status.decisionReset ? { needsReply: true, needsReplyDecidedBy: null, needsReplyDecidedAt: null } : {}),
-      },
-    }),
+        },
+      });
+    },
+    { maxWait: 15_000, timeout: 60_000 },
   );
-  await db.$transaction(updates);
   return { threadId: thread.id, status: status.status, messagesUpdated: changedReplies.length, duplicateOfId, exclusionAction };
 }
 
