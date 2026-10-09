@@ -14,6 +14,7 @@ async function reapply(db: PrismaClient, org: { id: string; name: string }) {
   const started = Date.now();
   const r = await reapplyExclusions(db, org.id, { onProgress: (done, total) => { if (done % 5000 === 0) console.log(`  ${org.name}: ${done}/${total} inbound emails checked`); } });
   console.log(`${org.name}: ${r.scanned} inbound emails checked, ${r.changed} changed, ${r.threadsRecomputed} threads recomputed in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  if (r.failed.length) console.log(`  ${r.failed.length} thread(s) could not be recomputed; run this again or \`pnpm replies:recompute all\`. First error: ${r.failed[0]!.error}`);
 }
 
 program
