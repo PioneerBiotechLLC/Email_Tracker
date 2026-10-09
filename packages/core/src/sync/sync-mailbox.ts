@@ -70,7 +70,7 @@ async function upsertMessage(db: PrismaClient, mailbox: Mailbox, folder: SyncFol
   const autoSignals = headerSignals(raw.headers);
   const exclusion =
     direction === "inbound"
-      ? evaluateExclusion({ mailboxId: mailbox.id, fromAddress, subject: raw.subject, autoSignals, inferenceClassification: raw.inferenceClassification }, ctx.exclusions.rules, ctx.exclusions.settings)
+      ? evaluateExclusion({ mailboxId: mailbox.id, fromAddress, subject: raw.subject, autoSignals, inferenceClassification: raw.inferenceClassification, toAddresses: raw.to, owners }, ctx.exclusions.rules, ctx.exclusions.settings)
       : { excludedBy: null, exclusionAction: null };
 
   const thread = await db.thread.upsert({

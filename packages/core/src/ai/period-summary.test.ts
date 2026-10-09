@@ -35,6 +35,11 @@ describe("buildActivity", () => {
   it("computes the figures from the rows (threads without a row are ignored)", () => {
     expect(a.stats).toEqual({ received: 3, sent: 1, replied: 1, repliedPct: 33.3, awaiting: 1, overdue: 1, threads: 3, mailboxes: 2 });
   });
+  it("excluded mail that is still readable (a colleague's email, a Cc copy) is context, not a received email", () => {
+    const b = buildActivity([...messages, { ...messages[2]!, exclusionAction: "no_reply_needed" }], threads, now);
+    expect(b.stats).toMatchObject({ received: 3, replied: 1 });
+    expect(b.threads.find((t) => t.id === "t3")!.inbound).toBe(2);
+  });
   it("groups per thread with counts, last message and counterparts, most urgent first", () => {
     expect(a.threads.map((t) => t.id)).toEqual(["t1", "t3", "t2"]);
     const t3 = a.threads.find((t) => t.id === "t3")!;

@@ -4,7 +4,7 @@ import { getDb, type Prisma, type PrismaClient } from "../db.js";
 import { getEnv } from "../env.js";
 import { createLogger } from "../log.js";
 import { localParts, zonedTimeToUtc } from "../sync/business-hours.js";
-import { INTERNAL_SIGNAL, isReadable } from "../sync/exclusions.js";
+import { READABLE_SIGNALS, isReadable } from "../sync/exclusions.js";
 import { effectiveTime } from "../sync/replies.js";
 import { recomputeThread } from "../sync/threads.js";
 import { writeThreadVectors } from "../ask/search-index.js";
@@ -338,8 +338,8 @@ export async function summarizeThread(threadId: string, opts: SummarizeOptions =
     return { threadId, outcome: "skipped", reason: copied ? "duplicate_copied" : "duplicate" };
   }
   // Every inbound message is excluded (notifications, newsletters, ignored senders): no AI call, even when forced.
-  // A thread between colleagues is excluded from reply tracking only, and can be summarized.
-  if (thread.exclusionAction && !(await db.message.count({ where: { threadId: thread.id, excludedBy: INTERNAL_SIGNAL } }))) return { threadId, outcome: "skipped", reason: "excluded" };
+  // A thread between colleagues, or of Cc copies, is excluded from reply tracking only, and can be summarized.
+  if (thread.exclusionAction && !(await db.message.count({ where: { threadId: thread.id, excludedBy: { in: [...READABLE_SIGNALS] } } }))) return { threadId, outcome: "skipped", reason: "excluded" };
 
   const callsToday = await countCallsToday(db, org.id, org.timezone, now);
   const skip = decideSkip({
@@ -398,7 +398,7 @@ export async function summarizeThreads(opts: SummarizeManyOptions = {}): Promise
   const where: Prisma.ThreadWhereInput = {
     ...(opts.mailboxId ? { mailboxId: opts.mailboxId } : { mailbox: { isActive: true, ...(opts.orgId ? { orgId: opts.orgId } : {}) } }),
     ...(opts.conversationIds ? { conversationId: { in: opts.conversationIds } } : {}),
-    OR: [{ exclusionAction: null }, { messages: { some: { excludedBy: INTERNAL_SIGNAL } } }],
+    OR: [{ exclusionAction: null }, { messages: { some: { excludedBy: { in: [...READABLE_SIGNALS] } } } }],
   };
   // Prisma can't compare two columns; filter messageCount > summaryMessageCount in JS.
   const rows = await db.thread.findMany({ where, select: { id: true, messageCount: true, summaryMessageCount: true }, orderBy: { lastMessageAt: "asc" } });

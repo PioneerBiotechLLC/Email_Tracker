@@ -10,6 +10,7 @@ import { requireOwner, isProduction } from "@/lib/session";
 
 export const metadata = { title: "Companies" };
 export const dynamic = "force-dynamic";
+export const maxDuration = 60; // adding a mailbox re-checks the stored copies the company's other mailboxes hold
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function CompanyFields({ org }: { org?: { name: string; slug: string; domain: string; domains: string[]; azureTenantId: string | null; timezone: string; workDays: number[]; workStart: string; workEnd: string; replySlaHours: number | null; summaryLanguage: string; logoUrl: string | null; primaryColor: string; secondaryColor: string; headingFont: string; bodyFont: string; aiContext: string | null } }) {

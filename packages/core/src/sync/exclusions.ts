@@ -5,9 +5,10 @@
  *  - "no_reply_needed": shown, but never awaiting a reply / overdue, and never sent to the AI.
  *
  * A message is excluded by the first matching company rule, else by the
- * built-in detection of bulk mail (always "no_reply_needed", so nothing is
- * hidden silently). Rules apply per inbound message, never per thread: a real
- * person replying later inside a notification thread still counts.
+ * built-in detection of internal, bulk and automatic mail and of Cc copies
+ * (always "no_reply_needed", so nothing is hidden silently). Rules apply per
+ * inbound message, never per thread: a real person replying later inside a
+ * notification thread still counts.
  *
  * Pure functions only (unit-tested); the DB side lives in ./exclusion-rules.ts.
  */
@@ -39,6 +40,10 @@ export interface ExclusionInput {
   autoSignals: readonly string[];
   /** Outlook Focused Inbox: "focused" | "other" */
   inferenceClassification: string | null;
+  /** the message's To recipients (any object with an address) */
+  toAddresses: readonly { address: string }[];
+  /** the receiving mailbox's own addresses (address + aliases), lower-case */
+  owners: ReadonlySet<string>;
 }
 
 export interface ExclusionSettings {
@@ -48,6 +53,10 @@ export interface ExclusionSettings {
   internalNoReply?: boolean;
   /** the company's email domains, lower-case (needed for internalNoReply) */
   companyDomains?: ReadonlySet<string>;
+  /** a copy in a mailbox that was only Cc'd (or not named) while another tracked mailbox is in To needs no reply there */
+  ccNoReply?: boolean;
+  /** lower-case addresses + aliases of every mailbox the company tracks (needed for ccNoReply) */
+  trackedAddresses?: ReadonlySet<string>;
 }
 
 export interface Exclusion {
@@ -167,13 +176,27 @@ export function isInternalSender(address: string, companyDomains: ReadonlySet<st
   return at > 0 && !!companyDomains?.has(a.slice(at + 1));
 }
 
-/** Built-in detection: the first signal that marks the message as internal, bulk or automatic, as "auto:<signal>". */
-export function autoSignal(msg: Pick<ExclusionInput, "fromAddress" | "autoSignals" | "inferenceClassification">, settings: ExclusionSettings): string | null {
+/**
+ * Whether the message is a Cc copy for its mailbox: none of the mailbox's own addresses is in To while
+ * another tracked mailbox of the company is. Only To counts, so a mailbox that was Cc'd, Bcc'd or reached
+ * through a group address holds a copy. When no tracked mailbox was in To (the email went to a customer,
+ * an untracked colleague or a group) the copy is the only record of the email and is not a copy.
+ */
+export function isCcCopy(msg: Pick<ExclusionInput, "toAddresses" | "owners">, tracked: ReadonlySet<string> | undefined): boolean {
+  if (!tracked?.size) return false;
+  const to = (msg.toAddresses ?? []).map((r) => lower(r?.address)).filter(Boolean);
+  return !to.some((a) => msg.owners.has(a)) && to.some((a) => tracked.has(a));
+}
+
+/** Built-in detection: the first signal that marks the message as internal, bulk, automatic or a Cc copy, as "auto:<signal>". */
+export function autoSignal(msg: Pick<ExclusionInput, "fromAddress" | "autoSignals" | "inferenceClassification" | "toAddresses" | "owners">, settings: ExclusionSettings): string | null {
   if (settings.internalNoReply && isInternalSender(msg.fromAddress, settings.companyDomains)) return INTERNAL_SIGNAL;
   if (settings.autoExclude) {
     if (msg.autoSignals.length) return `auto:${msg.autoSignals[0]}`;
     if (isNoReplySender(msg.fromAddress)) return "auto:noreply";
   }
+  // After bulk mail, so a newsletter's copy carries the same reason as its primary (and stays unreadable like it).
+  if (settings.ccNoReply && isCcCopy(msg, settings.trackedAddresses)) return CC_SIGNAL;
   if (settings.outlookOtherNoReply && lower(msg.inferenceClassification) === "other") return "auto:focused-other";
   return null;
 }
@@ -202,13 +225,34 @@ export const COUNTED = { exclusionAction: null } as const;
 export const INTERNAL_SIGNAL = "auto:internal";
 
 /**
- * Prisma `where` fragment for what the AI and Ask read: mail that is not excluded, plus colleagues'
- * mail (it is real content; it just needs no reply). Use it inside `AND: [...]` next to other ORs.
+ * Signal of a Cc copy: the email was addressed To another tracked mailbox, which records it; this mailbox
+ * was only Cc'd (or not named at all), so the copy is excluded from reply tracking only.
  */
-export const READABLE = { OR: [{ exclusionAction: null }, { excludedBy: INTERNAL_SIGNAL }] };
+export const CC_SIGNAL = "auto:cc";
+
+/** Excluded mail that is still real content (a colleague's email, a Cc copy): read by the AI and Ask, left out of reply tracking. */
+export const READABLE_SIGNALS: readonly string[] = [INTERNAL_SIGNAL, CC_SIGNAL];
+
+/**
+ * Prisma `where` fragment for what the AI and Ask read: mail that is not excluded, plus colleagues'
+ * mail and Cc copies (real content; it just needs no reply here). Use it inside `AND: [...]` next to other ORs.
+ */
+export const READABLE = { OR: [{ exclusionAction: null }, { excludedBy: { in: [...READABLE_SIGNALS] } }] };
 
 /** Whether an excluded message is still read by the AI and Ask (see READABLE). */
-export const isReadable = (m: { exclusionAction: string | null; excludedBy: string | null }) => !m.exclusionAction || m.excludedBy === INTERNAL_SIGNAL;
+export const isReadable = (m: { exclusionAction: string | null; excludedBy: string | null }) => !m.exclusionAction || READABLE_SIGNALS.includes(m.excludedBy ?? "");
+
+/**
+ * Category of a thread whose inbound mail is all excluded: "internal" between colleagues only; left as it is
+ * (null) when it is Cc copies of a conversation tracked in another mailbox (which it inherits the summary and
+ * category from), possibly with colleagues' mail; a notification otherwise.
+ */
+export function excludedThreadCategory(excludedBy: (string | null)[]): "internal" | "notification" | null {
+  if (!excludedBy.length) return null;
+  if (excludedBy.every((s) => s === INTERNAL_SIGNAL)) return "internal";
+  if (excludedBy.every((s) => !!s && READABLE_SIGNALS.includes(s))) return null;
+  return "notification";
+}
 
 /**
  * Prisma `where` fragment for list views of threads or messages: mail excluded
@@ -220,6 +264,7 @@ export function listVisibility(showExcluded: boolean): { OR: ({ exclusionAction:
 
 const AUTO_LABEL: Record<string, string> = {
   [INTERNAL_SIGNAL]: "internal email (sent by a colleague)",
+  [CC_SIGNAL]: "Cc copy (addressed To another tracked mailbox)",
   "auto:list-unsubscribe": "mailing list (List-Unsubscribe header)",
   "auto:list-id": "mailing list (List-Id header)",
   "auto:precedence-bulk": "bulk mail (Precedence header)",

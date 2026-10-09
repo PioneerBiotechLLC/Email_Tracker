@@ -6,7 +6,9 @@
  * row per mailbox. The rows share the RFC Message-ID, which is how we link
  * them: exactly one copy is the *primary* and the others point at it through
  * `duplicateOfId`. "All mailboxes" views and statistics only count primaries;
- * a single-mailbox view still shows everything that landed in that mailbox.
+ * a single-mailbox view still shows everything that landed in that mailbox,
+ * but a copy in a mailbox that was only Cc'd (another tracked mailbox was in
+ * To) is excluded from its reply tracking (`auto:cc`, see sync/exclusions.ts).
  *
  * The same pass records `internalRecipients`: which other addresses inside
  * the company's domains were in To/Cc ("who else in our company got this").

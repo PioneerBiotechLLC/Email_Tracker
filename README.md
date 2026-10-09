@@ -261,12 +261,14 @@ When two tracked mailboxes both receive an email (sales@ in To, regulatory@ in C
 - Marks a thread whose messages are **all** copies of one thread in another mailbox as a copy of that thread (`Thread.duplicateOfId`). Copy threads inherit the primary thread's AI summary instead of being summarized again.
 - Treats **sent mail from any tracked mailbox of the company** as a reply candidate (headers or conversation match): an email a colleague answered is not "waiting for us". The tracker shows the answering mailbox.
 - Hides copies from the **All mailboxes** views and statistics (`mailboxScope` adds `duplicateOfId = null`). A single-mailbox view still shows everything that landed in that mailbox, with a "copy" notice linking to the primary thread.
+- Records an email under the mailbox it was sent **To**. When another tracked mailbox is in To, the copy in a mailbox that was only Cc'd — or not named at all (Bcc, delivery through a group address) — is a *Cc copy* (`Message.excludedBy = auto:cc`, action `no_reply_needed`, see §9): listed with a badge, never waiting or overdue, left out of the received KPIs, charts and period figures, still readable by Ask and summaries. A copy that no tracked mailbox received directly (the To address is a customer, an untracked colleague or a group address) is the only record of the email and counts as received. Only To counts: to have mail sent to a group address count for a mailbox, add the group address as one of its aliases. Its own switch lives in Settings → Exclusion rules (on by default). Adding a mailbox re-checks the stored copies the company's other mailboxes hold (`pnpm mailbox add` does it in full; the dashboard says when to finish with `pnpm rules:reapply`); a paused mailbox still counts as tracked, so pausing never changes what the other mailboxes count.
 
 After deploying this version (or after adding a mailbox / changing the company's domains) run once:
 
 ```bash
 pnpm db:deploy
 pnpm replies:recompute all      # re-links copies, fills internalRecipients, recomputes every thread
+pnpm rules:reapply              # marks the stored Cc copies (first deploy of the Cc-copy rule, or when the dashboard says so after adding a mailbox)
 ```
 
 ### Track replies from a start date
@@ -317,21 +319,22 @@ Some mail should never be counted: GoDaddy account-activity notices, newsletters
 
 Every rule can carry a second condition, "…and subject contains", ANDed with the first (e.g. domain `microsoft.com` **and** subject contains `Microsoft 365`). While you type, the form shows *"This rule matches N emails in the last 90 days"*. Rules are deactivated, never deleted, and every change is written to the audit log. A company's own domains cannot be excluded.
 
-**Built-in detection** (on by default, three switches in the same Settings card) marks internal, bulk and automatic mail `no_reply_needed` — never `ignore`, so nothing is hidden silently:
+**Built-in detection** (on by default, four switches in the same Settings card) marks internal, bulk and automatic mail and Cc copies `no_reply_needed` — never `ignore`, so nothing is hidden silently:
 
 - internal mail: the sender is in the company's own domains (`Organization.domain` + `domains`, exact match), i.e. a colleague, its own switch (`auto:internal`). Unlike other excluded mail it stays readable by Ask, thread summaries and period summaries (`READABLE`), and a colleague's email that also goes to someone outside the company counts as the company's reply;
+- Cc copies: the email was addressed *To* another tracked mailbox and this mailbox was only Cc'd, Bcc'd or reached through a group address, its own switch (`auto:cc`, §8). Readable like internal mail; a thread made of Cc copies keeps the category it inherits from the primary thread instead of becoming a notification;
 
 - headers: `List-Unsubscribe`, `List-Id`, `Precedence: bulk | list | junk`, `X-Auto-Response-Suppress` (`Auto-Submitted` mail was already treated as an auto-reply);
 - senders: `noreply@`, `no-reply@`, `donotreply@`, `notifications@`, `mailer-daemon@`, `postmaster@`;
 - Outlook's Focused Inbox: mail Outlook filed under **Other** (Graph `inferenceClassification`), its own switch.
 
-Each excluded email stores why (`Message.excludedBy`: a rule id, or `auto:internal`, `auto:list-unsubscribe`, `auto:noreply`, `auto:focused-other`, …) and the badge shows it. When several rules match, a mailbox's own rule wins, then `ignore` over `no_reply_needed`, then the oldest rule; rules win over built-in detection.
+Each excluded email stores why (`Message.excludedBy`: a rule id, or `auto:internal`, `auto:list-unsubscribe`, `auto:noreply`, `auto:cc`, `auto:focused-other`, …) and the badge shows it. When several rules match, a mailbox's own rule wins, then `ignore` over `no_reply_needed`, then the oldest rule; rules win over built-in detection, and within it internal mail wins over bulk mail, which wins over a Cc copy, which wins over Outlook's "Other".
 
 **How it is applied**
 
 - During sync, before reply detection and before AI summarization — excluded mail costs no AI calls.
-- Per message, not per thread: a thread whose incoming emails are **all** excluded becomes `no_reply_needed` (hidden when all are `ignore`), gets the category *Notification* and is skipped by the AI. If a real person later replies inside such a thread, that email counts as usual.
-- Adding, editing, deactivating a rule or flipping a switch re-applies the rules to the company's stored emails (in chunks) and recomputes the affected threads. If a very large mailbox does not finish inside one request, the Settings message says so; finish with `pnpm rules:reapply`.
+- Per message, not per thread: a thread whose incoming emails are **all** excluded becomes `no_reply_needed` (hidden when all are `ignore`), gets the category *Notification* (a thread between colleagues is *Internal*; a thread of Cc copies keeps the category it inherits) and is skipped by the AI unless it is readable. If a real person later replies inside such a thread, that email counts as usual.
+- Adding, editing, deactivating a rule, flipping a switch or adding a mailbox re-applies the rules to the company's stored emails (in chunks) and recomputes the affected threads. If a very large mailbox does not finish inside one request, the message says so; finish with `pnpm rules:reapply`.
 - Quick actions for admins on tracker rows and on each email of a thread page: **Ignore this sender** / **Ignore this domain** create the rule, show how many emails were affected, and offer **Undo**.
 
 **Default rules** (seeded for new companies automatically; shown in Settings where you can edit or deactivate them):

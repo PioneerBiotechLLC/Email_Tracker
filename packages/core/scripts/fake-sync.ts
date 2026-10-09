@@ -223,9 +223,19 @@ try {
   const m2cc = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m2-cc" } });
   assert(m1cc.duplicateOfId === m1.id && m1cc.internalRecipients[0] === OWNER, "Cc copy of m1 → copy of the sales row (sales was in To)");
   assert(m2cc.direction === "inbound" && m2cc.duplicateOfId === m2.id, "inbox copy of our reply-all → copy of the Sent Items row");
-  assert(m1cc.repliedAt?.toISOString() === "2026-09-01T10:00:00.000Z" && m1cc.replyMethod === "header_match" && m1cc.repliedByMessageId === m2.id, "sales' reply answers regulatory's copy (cross-mailbox header match)");
+  // The email was addressed To sales@: regulatory@ was only Cc'd, so its copy is not received mail there (no reply fields, never waiting).
+  assert(m1cc.excludedBy === "auto:cc" && m1cc.exclusionAction === "no_reply_needed" && m1cc.repliedAt === null, `regulatory's copy of an email sent To sales@ is a Cc copy (${m1cc.excludedBy})`);
   const tReg = await db.thread.findUniqueOrThrow({ where: { mailboxId_conversationId: { mailboxId: mb2.id, conversationId: "conv-1" } } });
-  assert(tReg.duplicateOfId === t1.id && tReg.status === "awaiting_them", `regulatory thread is a copy of the sales thread and not waiting (${tReg.status})`);
+  assert(tReg.duplicateOfId === t1.id && tReg.status === "no_reply_needed" && tReg.exclusionAction === "no_reply_needed", `regulatory thread is a copy of the sales thread and not waiting (${tReg.status})`);
+  // With the switch off the copy is received mail in regulatory@ too, answered by sales' reply (cross-mailbox header match).
+  await db.organization.update({ where: { id: org.id }, data: { settings: { ccNoReply: false } } });
+  await reapplyExclusions(db, org.id);
+  const m1ccOff = await db.message.findUniqueOrThrow({ where: { graphMessageId: "m1-cc" } });
+  assert(m1ccOff.excludedBy === null && m1ccOff.repliedAt?.toISOString() === "2026-09-01T10:00:00.000Z" && m1ccOff.replyMethod === "header_match" && m1ccOff.repliedByMessageId === m2.id, "switch off: sales' reply answers regulatory's copy (cross-mailbox header match)");
+  assert((await db.thread.findUniqueOrThrow({ where: { id: tReg.id } })).status === "awaiting_them", "switch off: regulatory's copy thread is answered, not waiting");
+  await db.organization.update({ where: { id: org.id }, data: { settings: {} } });
+  await reapplyExclusions(db, org.id);
+  assert((await db.message.findUniqueOrThrow({ where: { graphMessageId: "m1-cc" } })).excludedBy === "auto:cc" && (await db.thread.findUniqueOrThrow({ where: { id: tReg.id } })).status === "no_reply_needed", "switch back on: the copy is excluded again");
   const allScope = mailboxScope({ orgId: org.id });
   assert((await db.message.count({ where: { ...allScope, direction: "inbound" } })) === 3 && (await db.message.count({ where: { mailboxId: mb2.id, direction: "inbound" } })) === 2, "all-mailboxes counts once; the single mailbox still sees its copies");
   assert((await db.thread.count({ where: { ...allScope, conversationId: "conv-1" } })) === 1, "all-mailboxes lists the conversation once");
@@ -267,10 +277,11 @@ try {
     content: [{ type: "tool_use", id: "t", name: PERIOD_SUMMARY_TOOL_NAME, input: { overview: "One customer thread, answered.", received: ["Ali asked for a quote for 500 units"], sent: ["Quote sent to Ali"], needs_attention: [] } }], usage: { input_tokens: 700, output_tokens: 90, cache_read_input_tokens: 0, cache_creation_input_tokens: 600 } } as unknown as Anthropic.Message; } } as unknown as Anthropic["messages"] };
   const at = d("2026-09-10T08:00:00Z");
   const pAll = await summarizePeriod({ orgId: org.id, mailboxId: null, period: "month", now: at, client: fakePeriodAi, createdBy: "check" });
-  assert(pAll.outcome === "summarized" && pAll.stats?.received === 3 && pAll.stats.sent === 2 && pAll.stats.replied === 1 && pAll.stats.threads === 3 && pAll.stats.mailboxes === 2, `all mailboxes, last 30 days: ${JSON.stringify(pAll.stats)}`);
+  // m8 (a colleague's email) is readable context, not received mail: like the KPIs, the figures only count mail that is not excluded.
+  assert(pAll.outcome === "summarized" && pAll.stats?.received === 2 && pAll.stats.sent === 2 && pAll.stats.replied === 1 && pAll.stats.threads === 3 && pAll.stats.mailboxes === 2, `all mailboxes, last 30 days: ${JSON.stringify(pAll.stats)}`);
   assert(pAll.record?.overview === "One customer thread, answered." && pAll.record.costUsd > 0 && pAll.record.scopeKey === "all", "digest stored with cost");
   const pReg = await summarizePeriod({ orgId: org.id, mailboxId: mb2.id, period: "month", now: at, client: fakePeriodAi });
-  assert(pReg.stats?.received === 3 && pReg.stats.sent === 0 && pReg.stats.threads === 2, `single mailbox keeps its copies: ${JSON.stringify(pReg.stats)}`);
+  assert(pReg.stats?.received === 0 && pReg.stats.sent === 0 && pReg.stats.threads === 2, `single mailbox: its Cc copies and colleagues' mail are context, not received mail: ${JSON.stringify(pReg.stats)}`);
   const pEmpty = await summarizePeriod({ orgId: org.id, mailboxId: null, period: "day", now: d("2026-12-01T08:00:00Z"), client: fakePeriodAi });
   assert(pEmpty.outcome === "skipped" && pEmpty.reason === "no_activity", "empty window → skipped without an API call");
   const latest = await latestPeriodSummary(db, org.id, null, "month");
