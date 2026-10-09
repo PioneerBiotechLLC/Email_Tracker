@@ -13,7 +13,7 @@ import { formatLocalDate } from "../ai/prompts.js";
 import { readBody } from "../crypto.js";
 import { Prisma, type PrismaClient } from "../db.js";
 import { zonedTimeToUtc } from "../sync/business-hours.js";
-import { INTERNAL_SIGNAL, READABLE } from "../sync/exclusions.js";
+import { READABLE, READABLE_SIGNALS } from "../sync/exclusions.js";
 import { searchPlans, snippet } from "./text.js";
 
 export interface AskScope {
@@ -136,7 +136,7 @@ function dateRange(scope: AskScope, after?: string, before?: string): { gte?: Da
 
 /** Conditions every email search shares. Copies of an email in other mailboxes are skipped when more than one mailbox is searched. */
 function emailConditions(scope: AskScope, mailboxIds: string[], range: { gte?: Date; lte?: Date }): Prisma.Sql[] {
-  const conds = [Prisma.sql`m."mailboxId" = ANY(${mailboxIds}::text[])`, Prisma.sql`m."isAutoReply" = false`, Prisma.sql`(m."exclusionAction" IS NULL OR m."excludedBy" = ${INTERNAL_SIGNAL})`];
+  const conds = [Prisma.sql`m."mailboxId" = ANY(${mailboxIds}::text[])`, Prisma.sql`m."isAutoReply" = false`, Prisma.sql`(m."exclusionAction" IS NULL OR m."excludedBy" = ANY(${[...READABLE_SIGNALS]}::text[]))`];
   if (mailboxIds.length > 1) conds.push(Prisma.sql`m."duplicateOfId" IS NULL`);
   if (scope.threadId) conds.push(Prisma.sql`m."threadId" = ${scope.threadId}`);
   if (range.gte) conds.push(Prisma.sql`m."receivedAt" >= ${range.gte}`);
@@ -204,7 +204,7 @@ async function searchThreads(db: PrismaClient, scope: AskScope, input: z.infer<t
   const limit = input.limit ?? 5;
   const mailboxIds = mailboxIdsFor(scope);
   const range = dateRange(scope, input.after, input.before);
-  const conds = [Prisma.sql`t."mailboxId" = ANY(${mailboxIds}::text[])`, Prisma.sql`(t."exclusionAction" IS NULL OR EXISTS (SELECT 1 FROM "Message" x WHERE x."threadId" = t."id" AND x."excludedBy" = ${INTERNAL_SIGNAL}))`];
+  const conds = [Prisma.sql`t."mailboxId" = ANY(${mailboxIds}::text[])`, Prisma.sql`(t."exclusionAction" IS NULL OR EXISTS (SELECT 1 FROM "Message" x WHERE x."threadId" = t."id" AND x."excludedBy" = ANY(${[...READABLE_SIGNALS]}::text[])))`];
   if (mailboxIds.length > 1) conds.push(Prisma.sql`t."duplicateOfId" IS NULL`);
   if (scope.threadId) conds.push(Prisma.sql`t."id" = ${scope.threadId}`);
   if (range.gte) conds.push(Prisma.sql`t."lastMessageAt" >= ${range.gte}`);

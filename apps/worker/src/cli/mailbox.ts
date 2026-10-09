@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { GraphProvider, disconnectDb, ensureSubscription, getDb, getEnv, seedDefaultRules, slugify } from "@email-tracker/core";
+import { GraphProvider, disconnectDb, ensureSubscription, getDb, getEnv, reapplyExclusions, seedDefaultRules, slugify } from "@email-tracker/core";
 
 const program = new Command().name("mailbox").description("Register and manage tracked mailboxes");
 
@@ -58,6 +58,9 @@ program
     if (aliases.length) console.log(`  aliases: ${aliases.join(", ")}`);
     const sub = await ensureSubscription(db, mailbox.id);
     console.log(sub.action === "skipped" ? `  live notifications: skipped (${sub.detail})` : sub.action === "error" ? `  live notifications: FAILED (${sub.detail})` : `  live notifications: subscription ${sub.action}, expires ${sub.expiresAt?.toISOString()}`);
+    // Stored emails addressed To this mailbox that the company's other mailboxes hold are Cc copies now: re-check them.
+    const reapplied = await reapplyExclusions(db, org.id, { onProgress: (done, total) => { if (done % 5000 === 0) console.log(`  ${done}/${total} stored emails re-checked`); } });
+    console.log(`  stored emails re-checked: ${reapplied.changed} changed (Cc copies of mail addressed to this mailbox)`);
     console.log(`\nNext: pnpm sync:once ${mailbox.emailAddress}`);
   });
 

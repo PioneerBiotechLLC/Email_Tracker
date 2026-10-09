@@ -7,8 +7,8 @@ import type { Prisma, PrismaClient } from "../db.js";
 import { createLogger } from "../log.js";
 import { orgSettings } from "../org-settings.js";
 import { orgDomains } from "./dedupe.js";
-import { evaluateExclusion, matchesRule, orderRules, type ExclusionAction, type ExclusionSettings, type RuleLike, type RuleType } from "./exclusions.js";
-import { recomputeThread } from "./threads.js";
+import { evaluateExclusion, matchesRule, orderRules, type ExclusionAction, type ExclusionInput, type ExclusionSettings, type RuleLike, type RuleType } from "./exclusions.js";
+import { ownerAddresses, recomputeThread, trackedAddresses } from "./threads.js";
 
 const log = createLogger("exclusions");
 
@@ -18,13 +18,18 @@ export interface ExclusionContext {
   settings: ExclusionSettings;
 }
 
-/** A company's active rules and detection settings. Always scoped by orgId: one company's rules never see another's mail. */
+/**
+ * A company's active rules and detection settings. Always scoped by orgId: one company's rules never see
+ * another's mail. The tracked addresses (for Cc-copy detection) are every mailbox registered for the company,
+ * paused ones included, so pausing a mailbox never rewrites which stored emails count as received elsewhere.
+ */
 export async function loadExclusionContext(db: PrismaClient, orgId: string): Promise<ExclusionContext> {
-  const [org, rules] = await Promise.all([
+  const [org, rules, mailboxes] = await Promise.all([
     db.organization.findUniqueOrThrow({ where: { id: orgId }, select: { settings: true, domain: true, domains: true } }),
     db.exclusionRule.findMany({ where: { orgId, isActive: true }, select: { id: true, mailboxId: true, type: true, value: true, andSubjectContains: true, action: true, createdAt: true } }),
+    db.mailbox.findMany({ where: { orgId }, select: { emailAddress: true, aliases: true } }),
   ]);
-  return { rules: orderRules(rules), settings: { ...orgSettings(org.settings), companyDomains: orgDomains(org) } };
+  return { rules: orderRules(rules), settings: { ...orgSettings(org.settings), companyDomains: orgDomains(org), trackedAddresses: trackedAddresses(mailboxes) } };
 }
 
 export interface ReapplyOptions {
@@ -46,12 +51,14 @@ const CHUNK = 500;
 
 /**
  * Re-evaluates every stored inbound message of a company against its current
- * rules (after a rule or setting change) and recomputes the affected threads.
- * Chunked and idempotent: each chunk writes its messages and recomputes its
- * threads before the next one starts, so an interrupted pass can simply be run again.
+ * rules (after a rule or setting change, or after a mailbox was added) and
+ * recomputes the affected threads. Chunked and idempotent: each chunk writes
+ * its messages and recomputes its threads before the next one starts, so an
+ * interrupted pass can simply be run again.
  */
 export async function reapplyExclusions(db: PrismaClient, orgId: string, opts: ReapplyOptions = {}): Promise<ReapplyResult> {
   const { rules, settings } = await loadExclusionContext(db, orgId);
+  const owners = new Map((await db.mailbox.findMany({ where: { orgId }, select: { id: true, emailAddress: true, aliases: true } })).map((m) => [m.id, ownerAddresses(m)]));
   const where = { mailbox: { orgId }, direction: "inbound" } satisfies Prisma.MessageWhereInput;
   const total = await db.message.count({ where });
   const out: ReapplyResult = { scanned: 0, changed: 0, threadsRecomputed: 0, partial: false };
@@ -63,7 +70,7 @@ export async function reapplyExclusions(db: PrismaClient, orgId: string, opts: R
     }
     const page = await db.message.findMany({
       where,
-      select: { id: true, mailboxId: true, conversationId: true, fromAddress: true, subject: true, autoSignals: true, inferenceClassification: true, excludedBy: true, exclusionAction: true },
+      select: { id: true, mailboxId: true, conversationId: true, fromAddress: true, subject: true, autoSignals: true, inferenceClassification: true, toAddresses: true, excludedBy: true, exclusionAction: true },
       orderBy: { id: "asc" },
       take: CHUNK,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -74,7 +81,8 @@ export async function reapplyExclusions(db: PrismaClient, orgId: string, opts: R
     const groups = new Map<string, { excludedBy: string | null; exclusionAction: ExclusionAction | null; ids: string[] }>();
     const threads = new Map<string, { mailboxId: string; conversationId: string }>();
     for (const m of page) {
-      const want = evaluateExclusion(m, rules, settings);
+      const input: ExclusionInput = { ...m, toAddresses: m.toAddresses as unknown as ExclusionInput["toAddresses"], owners: owners.get(m.mailboxId) ?? new Set() };
+      const want = evaluateExclusion(input, rules, settings);
       if (want.excludedBy === m.excludedBy && want.exclusionAction === m.exclusionAction) continue;
       const key = `${want.excludedBy}\u0000${want.exclusionAction}`;
       (groups.get(key) ?? groups.set(key, { ...want, ids: [] }).get(key)!).ids.push(m.id);

@@ -1,9 +1,12 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { GraphProvider, ensureSubscription, getDb, isValidSlug, logAudit, seedDefaultRules, slugify } from "@email-tracker/core";
+import { GraphProvider, ensureSubscription, getDb, isValidSlug, logAudit, reapplyExclusions, seedDefaultRules, slugify } from "@email-tracker/core";
 import { requireOwner } from "@/lib/session";
 import type { ActionResult } from "./settings";
+
+/** Time budget for re-checking stored copies after a mailbox is added (the Graph calls before it take a few seconds of the request). */
+const REAPPLY_SECONDS = 30;
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #C2922F");
 const hhmm = z.string().regex(/^\d{2}:\d{2}$/, "Use HH:MM");
@@ -99,9 +102,13 @@ export async function addMailbox(orgId: string, _prev: ActionResult | null, form
     if (mb.orgId !== orgId) return { ok: false, message: "That mailbox already belongs to another company." };
     await logAudit(db, { orgId, userEmail: owner.email, action: "mailbox.add", targetType: "mailbox", targetId: mb.id, after: { email } });
     const sub = await ensureSubscription(db, mb.id);
+    // Stored emails addressed To this mailbox that the company's other mailboxes hold are Cc copies now: re-check them.
+    const reapplied = await reapplyExclusions(db, orgId, { deadlineAt: new Date(Date.now() + REAPPLY_SECONDS * 1000) });
     revalidatePath("/companies");
+    revalidatePath("/c/[slug]", "layout");
     const subMsg = sub.action === "skipped" ? `Live notifications skipped: ${sub.detail}.` : sub.action === "error" ? `Live notifications failed: ${sub.detail}.` : "Live notifications subscribed.";
-    return { ok: true, message: `Mailbox ${email} added. ${subMsg} Now run the backfill from your laptop: pnpm sync:once ${email}` };
+    const rest = reapplied.partial ? ", then pnpm rules:reapply (re-checking the copies other mailboxes hold did not finish in time)" : "";
+    return { ok: true, message: `Mailbox ${email} added. ${subMsg} Now run the backfill from your laptop: pnpm sync:once ${email}${rest}` };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, message: /403|Access|denied|policy/i.test(msg) ? `Graph refused access to ${email}: check admin consent and the Application Access Policy in that tenant (${msg.slice(0, 120)})` : `Could not resolve ${email} in Microsoft 365: ${msg.slice(0, 160)}` };

@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from "../db.js";
 import { getEnv } from "../env.js";
 import { normalizeSubject } from "../mail/subject.js";
 import { DEFAULT_BUSINESS_HOURS, type BusinessHours } from "./business-hours.js";
-import { INTERNAL_SIGNAL, isInternalSender, threadExclusion, type ExclusionAction } from "./exclusions.js";
+import { excludedThreadCategory, isInternalSender, threadExclusion, type ExclusionAction } from "./exclusions.js";
 import { orgSettings, trackingStart } from "../org-settings.js";
 import { computeThreadStatus, detectReplies, type ReplyInputMessage, type ReplyResult } from "./replies.js";
 
@@ -34,6 +34,11 @@ export function slaHoursFor(org: OrgHours): number {
 
 export function ownerAddresses(mailbox: { emailAddress: string; aliases: string[] }): Set<string> {
   return new Set([mailbox.emailAddress.toLowerCase(), ...mailbox.aliases.map((a) => a.toLowerCase())]);
+}
+
+/** Every address that belongs to one of the given mailboxes (addresses + aliases), lower-case. */
+export function trackedAddresses(mailboxes: { emailAddress: string; aliases: string[] }[]): Set<string> {
+  return new Set(mailboxes.flatMap((m) => [...ownerAddresses(m)]));
 }
 
 const messageSelect = {
@@ -277,8 +282,8 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
   const duplicateOfId = await containingThread(db, { id: thread.id, mailboxId, orgId: thread.mailbox.orgId, mailboxCreatedAt: thread.mailbox.createdAt }, messages);
   const realInbound = messages.filter((m, i) => inputs[i]!.direction === "inbound" && !m.isAutoReply);
   const exclusionAction = threadExclusion(realInbound.map((m) => m.exclusionAction));
-  // A thread between colleagues only is "internal", not a notification.
-  const excludedCategory = realInbound.every((m) => m.excludedBy === INTERNAL_SIGNAL) ? ("internal" as const) : ("notification" as const);
+  // A thread between colleagues only is "internal", not a notification; a thread of Cc copies keeps the category it inherits.
+  const excludedCategory = excludedThreadCategory(realInbound.map((m) => m.excludedBy));
   const computed = computeThreadStatus(
     inputs,
     replies,
@@ -309,7 +314,7 @@ export async function recomputeThread(db: PrismaClient, mailboxId: string, conve
         duplicateOfId,
         exclusionAction,
         // Excluded threads are notifications. When a rule is removed the thread goes back to the AI for a real category.
-        ...(thread.categoryManual ? {} : exclusionAction ? { category: excludedCategory } : thread.exclusionAction ? { category: "other" as const, summaryMessageCount: 0 } : {}),
+        ...(thread.categoryManual ? {} : exclusionAction ? (excludedCategory ? { category: excludedCategory } : {}) : thread.exclusionAction ? { category: "other" as const, summaryMessageCount: 0 } : {}),
         // A reopened thread is no longer closed.
         ...(thread.status === "closed" && status.status !== "closed" ? { closedAt: null, closedBy: null } : {}),
         // A newer inbound message invalidates the previous needsReply decision (user or AI) until the AI re-summarizes.

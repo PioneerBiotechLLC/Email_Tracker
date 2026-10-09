@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { orgSettings } from "../org-settings.js";
 import { businessMinutesBetween, DEFAULT_BUSINESS_HOURS } from "./business-hours.js";
 import {
-  autoSignal, evaluateExclusion, exclusionReason, headerSignals, isNoReplySender, listVisibility, matchesRule, normalizeRuleValue, orderRules, ruleValueError, threadExclusion,
+  autoSignal, evaluateExclusion, excludedThreadCategory, exclusionReason, headerSignals, isNoReplySender, isReadable, listVisibility, matchesRule, normalizeRuleValue, orderRules, ruleValueError, threadExclusion,
   type ExclusionInput, type RuleLike,
 } from "./exclusions.js";
 import { computeThreadStatus, detectReplies, type ReplyInputMessage } from "./replies.js";
@@ -11,7 +11,7 @@ const ON = { autoExclude: true, outlookOtherNoReply: true };
 const OFF = { autoExclude: false, outlookOtherNoReply: false };
 
 function msg(p: Partial<ExclusionInput> = {}): ExclusionInput {
-  return { mailboxId: "mb-sales", fromAddress: "ali@customer.com", subject: "PO 4512", autoSignals: [], inferenceClassification: "focused", ...p };
+  return { mailboxId: "mb-sales", fromAddress: "ali@customer.com", subject: "PO 4512", autoSignals: [], inferenceClassification: "focused", toAddresses: [{ address: "sales@api-pharma.net" }], owners: new Set(["sales@api-pharma.net"]), ...p };
 }
 let seq = 0;
 function rule(p: Partial<RuleLike> & Pick<RuleLike, "type" | "value">): RuleLike {
@@ -122,6 +122,62 @@ describe("built-in detection", () => {
     expect(orgSettings({})).toMatchObject(ON);
     expect(orgSettings(null)).toMatchObject(ON);
     expect(orgSettings({ autoExclude: false, outlookOtherNoReply: "yes" })).toMatchObject({ autoExclude: false, outlookOtherNoReply: true });
+  });
+});
+
+describe("Cc copies (an email is recorded under the mailbox it was sent To)", () => {
+  const tracked = new Set(["sales@api-pharma.net", "orders@api-pharma.net", "regulatory@api-pharma.net"]);
+  const company = { ...ON, ccNoReply: true, trackedAddresses: tracked };
+  // regulatory@'s copy of an email
+  const reg = { mailboxId: "mb-regulatory", owners: new Set(["regulatory@api-pharma.net"]) };
+  const toSales = [{ address: "Sales@API-Pharma.net", name: "Sales" }];
+
+  it("a mailbox that was only Cc'd on an email addressed To another tracked mailbox needs no reply", () => {
+    expect(evaluateExclusion(msg({ ...reg, toAddresses: toSales }), [], company)).toEqual({ excludedBy: "auto:cc", exclusionAction: "no_reply_needed" });
+    expect(exclusionReason("auto:cc")).toBe("auto: Cc copy (addressed To another tracked mailbox)");
+  });
+  it("the mailbox in To keeps the email, through an alias too, even next to other tracked mailboxes", () => {
+    expect(autoSignal(msg({ ...reg, toAddresses: [...toSales, { address: "regulatory@api-pharma.net" }] }), company)).toBeNull();
+    expect(autoSignal(msg({ toAddresses: [{ address: "Orders@api-pharma.net" }], owners: new Set(["sales@api-pharma.net", "orders@api-pharma.net"]) }), company)).toBeNull();
+  });
+  it("only To counts: a mailbox reached by Bcc or through a group address holds a copy as well", () => {
+    expect(autoSignal(msg({ ...reg, toAddresses: toSales }), company)).toBe("auto:cc"); // regulatory@ is in neither To nor Cc
+  });
+  it("a copy that no tracked mailbox received directly is the only record of the email: it counts", () => {
+    expect(autoSignal(msg({ ...reg, toAddresses: [{ address: "ali@customer.com" }] }), company)).toBeNull();
+    expect(autoSignal(msg({ ...reg, toAddresses: [{ address: "ceo@api-pharma.net" }] }), company)).toBeNull(); // untracked colleague
+    expect(autoSignal(msg({ ...reg, toAddresses: [{ address: "everyone@api-pharma.net" }] }), company)).toBeNull(); // group address
+    expect(autoSignal(msg({ ...reg, toAddresses: [] }), company)).toBeNull();
+    expect(autoSignal(msg({ ...reg, toAddresses: [{ address: "" }, {} as { address: string }] }), company)).toBeNull();
+  });
+  it("is its own switch and needs the tracked addresses", () => {
+    expect(autoSignal(msg({ ...reg, toAddresses: toSales }), { ...company, ccNoReply: false })).toBeNull();
+    expect(autoSignal(msg({ ...reg, toAddresses: toSales }), { ...company, trackedAddresses: undefined })).toBeNull();
+    expect(autoSignal(msg({ ...reg, toAddresses: toSales }), ON)).toBeNull();
+    expect(orgSettings({}).ccNoReply).toBe(true);
+    expect(orgSettings({ ccNoReply: false }).ccNoReply).toBe(false);
+  });
+  it("colleagues' and bulk mail keep their own reason; Outlook 'Other' comes after", () => {
+    expect(autoSignal(msg({ ...reg, fromAddress: "rahma@api-pharma.net", toAddresses: toSales }), { ...company, internalNoReply: true, companyDomains: new Set(["api-pharma.net"]) })).toBe("auto:internal");
+    expect(autoSignal(msg({ ...reg, autoSignals: ["list-id"], toAddresses: toSales }), company)).toBe("auto:list-id");
+    expect(autoSignal(msg({ ...reg, inferenceClassification: "other", toAddresses: toSales }), company)).toBe("auto:cc");
+    const r = rule({ type: "sender_domain", value: "customer.com", action: "ignore" });
+    expect(evaluateExclusion(msg({ ...reg, toAddresses: toSales }), [r], company)).toEqual({ excludedBy: r.id, exclusionAction: "ignore" });
+  });
+  it("stays readable by the AI and Ask, like colleagues' mail", () => {
+    expect(isReadable({ exclusionAction: "no_reply_needed", excludedBy: "auto:cc" })).toBe(true);
+    expect(isReadable({ exclusionAction: "no_reply_needed", excludedBy: "auto:internal" })).toBe(true);
+    expect(isReadable({ exclusionAction: "no_reply_needed", excludedBy: "auto:noreply" })).toBe(false);
+    expect(isReadable({ exclusionAction: "ignore", excludedBy: "r1" })).toBe(false);
+    expect(isReadable({ exclusionAction: null, excludedBy: null })).toBe(true);
+  });
+  it("a thread of Cc copies keeps its category; colleagues only → internal; anything else excluded → notification", () => {
+    expect(excludedThreadCategory(["auto:internal", "auto:internal"])).toBe("internal");
+    expect(excludedThreadCategory(["auto:cc"])).toBeNull();
+    expect(excludedThreadCategory(["auto:cc", "auto:internal"])).toBeNull();
+    expect(excludedThreadCategory(["auto:cc", "auto:noreply"])).toBe("notification");
+    expect(excludedThreadCategory(["r1"])).toBe("notification");
+    expect(excludedThreadCategory([])).toBeNull();
   });
 });
 

@@ -99,7 +99,7 @@ export async function updateExclusionSettings(orgId: string, _prev: ActionResult
   const db = getDb();
   const org = await db.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { settings: true } });
   const before = orgSettings(org.settings);
-  const after = { autoExclude: formData.get("autoExclude") === "on", outlookOtherNoReply: formData.get("outlookOtherNoReply") === "on", internalNoReply: formData.get("internalNoReply") === "on" };
+  const after = { autoExclude: formData.get("autoExclude") === "on", outlookOtherNoReply: formData.get("outlookOtherNoReply") === "on", internalNoReply: formData.get("internalNoReply") === "on", ccNoReply: formData.get("ccNoReply") === "on" };
   const settings = { ...(org.settings && typeof org.settings === "object" && !Array.isArray(org.settings) ? org.settings : {}), ...after } as Prisma.InputJsonObject;
   await db.organization.update({ where: { id: ctx.orgId }, data: { settings } });
   await logAudit(db, { orgId: ctx.orgId, userEmail: ctx.email, action: "settings.exclusions", targetType: "organization", targetId: ctx.orgId, before, after });

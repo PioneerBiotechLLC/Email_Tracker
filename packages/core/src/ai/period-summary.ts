@@ -109,6 +109,8 @@ interface ActivityMessage {
   direction: "inbound" | "outbound";
   receivedAt: Date;
   repliedAt: Date | null;
+  /** excluded mail that is still readable (a colleague's email, a Cc copy) is context, not a received email */
+  exclusionAction?: string | null;
   fromAddress: string;
   fromName: string | null;
   toAddresses: unknown;
@@ -141,8 +143,10 @@ export function buildActivity(messages: ActivityMessage[], threads: ActivityThre
     if (!t) continue;
     mailboxes.add(m.mailbox.emailAddress);
     if (m.direction === "inbound") {
-      received += 1;
-      if (m.repliedAt) replied += 1;
+      if (!m.exclusionAction) {
+        received += 1;
+        if (m.repliedAt) replied += 1;
+      }
     } else sent += 1;
     let g = groups.get(t.id);
     if (!g) {
@@ -191,7 +195,7 @@ export async function collectPeriodActivity(db: PrismaClient, opts: CollectOptio
   const now = opts.now ?? new Date();
   const messages = await db.message.findMany({
     where: { ...mailboxScope({ orgId: opts.orgId }, opts.mailboxId), isAutoReply: false, AND: [READABLE], receivedAt: { gte: opts.from, lte: opts.to } },
-    select: { threadId: true, direction: true, receivedAt: true, repliedAt: true, fromAddress: true, fromName: true, toAddresses: true, bodyPreview: true, mailbox: { select: { emailAddress: true, aliases: true } } },
+    select: { threadId: true, direction: true, receivedAt: true, repliedAt: true, exclusionAction: true, fromAddress: true, fromName: true, toAddresses: true, bodyPreview: true, mailbox: { select: { emailAddress: true, aliases: true } } },
   });
   const threadIds = [...new Set(messages.map((m) => m.threadId))];
   const threads: ActivityThread[] = [];
